@@ -604,7 +604,14 @@ std::string DarlingServer::Process::executablePath() const {
 
 void DarlingServer::Process::setExecutablePath(std::string path) {
 	std::unique_lock lock(_rwlock);
+	// iosc: exec without checkout/checkin (same Linux process) only replaces the path;
+	// a replacement of a known path is an exec, so report NOTE_EXEC like the replacement path does
+	bool didExec = !_executablePath.empty() && _executablePath != path;
 	_executablePath = std::move(path);
+	lock.unlock();
+	if (didExec) {
+		_notifyListeningKqchannels(NOTE_EXEC, 0);
+	}
 };
 
 uintptr_t DarlingServer::Process::allocatePages(size_t pageCount, int protection, uintptr_t addressHint, bool fixed, bool overwrite) {
@@ -692,6 +699,7 @@ uintptr_t DarlingServer::Process::getNextRegion(uintptr_t address) const {
 
 void DarlingServer::Process::notifyDead() {
 	decltype(_threads) threads;
+	decltype(_kqchannels) kqchannels;
 	{
 		std::unique_lock lock(_rwlock);
 		if (_dead) {
@@ -702,9 +710,12 @@ void DarlingServer::Process::notifyDead() {
 		_dead = true;
 		threads = _threads;
 
-		// clear out all kqchannels we own
-		_kqchannels.clear();
+		// take out all kqchannels we own; they are destroyed below, outside the lock:
+		// a process kqchan watching this very process unregisters itself from us in
+		// its destructor and would deadlock on _rwlock (std::system_error EDEADLK)
+		kqchannels.swap(_kqchannels);
 	}
+	kqchannels.clear();
 
 	// keep ourselves alive until the duct-taped context is done
 	_selfReference = shared_from_this();
