@@ -2062,7 +2062,9 @@ mach_ports_register(
 
 	for (i = 0; i < portsCnt; i++) {
 		ports[i] = memory[i];
-		if (IP_VALID(ports[i]) && (ports[i]->ip_immovable_receive || ports[i]->ip_immovable_send)) {
+		// iOS 27 launchd registers a send right to a port with an immovable receive right;
+		// only immovable send rights are a problem here (as in newer XNU)
+		if (IP_VALID(ports[i]) && ports[i]->ip_immovable_send) {
 			return KERN_INVALID_RIGHT;
 		}
 	}
