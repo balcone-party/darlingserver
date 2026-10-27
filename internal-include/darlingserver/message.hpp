@@ -60,6 +60,7 @@ namespace DarlingServer {
 
 		void _initWithOther(Message&&);
 		void _cleanupSelf();
+		static struct ucred _ourCredentials();
 
 		struct cmsghdr* _credentialsHeader();
 		const struct cmsghdr* _credentialsHeader() const;
@@ -71,6 +72,11 @@ namespace DarlingServer {
 		void _ensureDescriptorHeader(size_t descriptorSpace);
 
 	public:
+		// Our pid/uid/gid for SCM_CREDENTIALS are cached (each Message used to cost three
+		// syscalls, and receiveMany() preallocates 16 of them per read). Call this after
+		// changing our uid/gid.
+		static void invalidateCredentialsCache();
+
 		/**
 		 * Default-initializes a Message.
 		 *

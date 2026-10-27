@@ -997,6 +997,7 @@ static void copyAndSetAttributes(std::string& fromPath, std::string& toPath) {
 }
 
 static void temp_drop_privileges(uid_t uid, gid_t gid) {
+	DarlingServer::Message::invalidateCredentialsCache();
 	if (geteuid() != 0) {
 		return;
 	}
@@ -1012,6 +1013,7 @@ static void temp_drop_privileges(uid_t uid, gid_t gid) {
 };
 
 static void perma_drop_privileges(uid_t uid, gid_t gid) {
+	DarlingServer::Message::invalidateCredentialsCache();
 	if (geteuid() != 0) {
 		return;
 	}
@@ -1026,6 +1028,7 @@ static void perma_drop_privileges(uid_t uid, gid_t gid) {
 };
 
 static void regain_privileges() {
+	DarlingServer::Message::invalidateCredentialsCache();
 	// temp_drop_privileges() leaves root only in the saved set-user-ID (real and effective
 	// are both the original user), so check all three: only a process that never had root
 	// (non-root mode) should skip regaining it.

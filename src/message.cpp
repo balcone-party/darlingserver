@@ -17,6 +17,7 @@
  * along with Darling.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <atomic>
 #include <darlingserver/message.hpp>
 #include <unistd.h>
 #include <cstdlib>
@@ -52,6 +53,23 @@ void DarlingServer::Address::setRawSize(size_t newRawSize) {
 	_size = newRawSize;
 };
 
+static std::atomic<bool> credentialsCacheValid{false};
+static struct ucred credentialsCache;
+
+struct ucred DarlingServer::Message::_ourCredentials() {
+	if (!credentialsCacheValid.load(std::memory_order_acquire)) {
+		credentialsCache.pid = getpid();
+		credentialsCache.uid = getuid();
+		credentialsCache.gid = getgid();
+		credentialsCacheValid.store(true, std::memory_order_release);
+	}
+	return credentialsCache;
+};
+
+void DarlingServer::Message::invalidateCredentialsCache() {
+	credentialsCacheValid.store(false, std::memory_order_release);
+};
+
 DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std::function<void()> sendNotificationCallback):
 	_sendNotificationCallback(sendNotificationCallback)
 {
@@ -65,10 +83,7 @@ DarlingServer::Message::Message(size_t bufferSpace, size_t descriptorSpace, std:
 	_controlHeader->cmsg_len = CMSG_LEN(sizeof(struct ucred));
 	_controlHeader->cmsg_level = SOL_SOCKET;
 	_controlHeader->cmsg_type = SCM_CREDENTIALS;
-	struct ucred ourCreds;
-	ourCreds.pid = getpid();
-	ourCreds.uid = getuid();
-	ourCreds.gid = getgid();
+	struct ucred ourCreds = _ourCredentials();
 	// the cmsg man page says memcpy should be used with CMSG_DATA instead of direct pointer access
 	memcpy(CMSG_DATA(_controlHeader), &ourCreds, sizeof(ourCreds));
 
@@ -348,10 +363,7 @@ void DarlingServer::Message::_ensureCredentialsHeader() {
 	credHeader->cmsg_level = SOL_SOCKET;
 	credHeader->cmsg_type = SCM_CREDENTIALS;
 
-	struct ucred creds;
-	creds.pid = getpid();
-	creds.uid = getuid();
-	creds.gid = getgid();
+	struct ucred creds = _ourCredentials();
 	memcpy(CMSG_DATA(credHeader), &creds, sizeof(struct ucred));
 };
 
