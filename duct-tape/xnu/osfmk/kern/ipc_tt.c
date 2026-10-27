@@ -1606,7 +1606,9 @@ thread_set_special_port(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if (IP_VALID(port) && (port->ip_immovable_receive || port->ip_immovable_send)) {
+	// iOS 27 hands out ports with an immovable receive right as special ports (xpcproxy
+	// -> daemon bootstrap); only an immovable send right matters here, as in newer XNU
+	if (IP_VALID(port) && port->ip_immovable_send) {
 		return KERN_INVALID_RIGHT;
 	}
 
@@ -1900,7 +1902,9 @@ task_set_special_port(
 		return KERN_NO_ACCESS;
 	}
 
-	if (IP_VALID(port) && (port->ip_immovable_receive || port->ip_immovable_send)) {
+	// iOS 27 hands out ports with an immovable receive right as special ports (xpcproxy
+	// -> daemon bootstrap); only an immovable send right matters here, as in newer XNU
+	if (IP_VALID(port) && port->ip_immovable_send) {
 		return KERN_INVALID_RIGHT;
 	}
 

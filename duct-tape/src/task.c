@@ -116,6 +116,9 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 	}
 
 	task->xnu_task.audit_token.val[5] = task->saved_pid;
+	// pidversion (execcnt): libxpc requires a non-zero one in its own token and compares it with
+	// the one launchd echoes back from the message trailer; the client loader reports 1 as well
+	task->xnu_task.audit_token.val[7] = 1;
 
 	if (architecture == dserver_rpc_architecture_x86_64 || architecture == dserver_rpc_architecture_arm64) {
 		task_set_64Bit_addr(&task->xnu_task);
