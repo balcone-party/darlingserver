@@ -103,7 +103,11 @@ bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqcha
 
 	dtape_log_debug("has events before process? %s", has_events ? "yes" : "no");
 
+	// as in XNU knote_process(): the knote is suppressed and locked while it is processed
+	// (filt_machport_turnstile_prepare_lazily asserts it when a received message carries port rights)
+	kqchan->knote.kn_status |= KN_SUPPRESSED | KN_LOCKED;
 	bool result = (filt_machportprocess(&kqchan->knote, (void*)&reply->kev) & FILTER_ACTIVE) ? true : false;
+	kqchan->knote.kn_status &= ~(KN_SUPPRESSED | KN_LOCKED);
 
 	dtape_log_debug("had events that were processed? %s", result ? "yes" : "no");
 
