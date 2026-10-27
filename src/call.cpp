@@ -56,6 +56,21 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 	if ((header->number & DSERVER_CALL_UNMANAGED_FLAG) == 0) {
 		// now let's lookup (and possibly create) the process and thread making this call
+		// pid/tid in a PID namespace get recycled: an entry left from a dead process (its
+		// lifetime-pipe hangup may not have been processed yet) must not be reused
+		// for a new process or thread with the same number.
+		if (auto stale = processRegistry().lookupEntryByNSID(header->pid)) {
+			if ((*stale)->id() != requestMessage.pid()) {
+				processRegistry().unregisterEntry(*stale);
+			}
+		}
+		if (auto stale = threadRegistry().lookupEntryByNSID(header->tid)) {
+			auto owner = (*stale)->process();
+			if (!owner || owner->id() != requestMessage.pid()) {
+				threadRegistry().unregisterEntry(*stale);
+			}
+		}
+
 		process = processRegistry().registerIfAbsent(header->pid, [&]() {
 			std::shared_ptr<Process> tmp = nullptr;
 
