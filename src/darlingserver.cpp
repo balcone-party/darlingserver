@@ -1378,6 +1378,9 @@ int main(int argc, char** argv) {
 	sigaction(SIGUSR1, &leak_info_action, NULL);
 #endif
 
+	// iosc: дамп микропотоков по touch <prefix>/dump.req
+	DarlingServer::startDumpWatcher(prefix);
+
 	// create the server
 	auto server = new DarlingServer::Server(prefix);
 

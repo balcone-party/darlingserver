@@ -42,6 +42,10 @@ namespace DarlingServer {
 	class Process;
 	class Call;
 
+	// iosc: дамп микропотоков по touch <prefix>/dump.req (src/dump.cpp)
+	void dumpThreads(int fd);
+	void startDumpWatcher(const char* prefix);
+
 	class Thread: public std::enable_shared_from_this<Thread>, public Loggable {
 		friend class Process;
 		friend class Call; // HACK, see call.cpp
@@ -122,6 +126,7 @@ namespace DarlingServer {
 		static void microthreadContinuation();
 
 		friend struct ::DTapeHooks;
+		friend void dumpThreads(int fd);  // iosc: src/dump.cpp
 
 		std::optional<Message> _s2cPerform(Message&& call, dserver_s2c_msgnum_t expectedReplyNumber, size_t expectedReplySize);
 

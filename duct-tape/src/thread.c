@@ -2319,3 +2319,15 @@ ux_exception(int                        exception,
 }
 
 // </copied>
+
+size_t dtape_thread_struct_size(void) {
+	return sizeof(dtape_thread_t);
+};
+
+// iosc: состояние ожидания потока для дампа микропотоков (src/dump.cpp)
+void dtape_thread_describe(dtape_thread_t* thread, char* buf, size_t size, bool (*valid_string)(const char*)) {
+	snprintf(buf, size, "name=%s state=%#x wait_event=%#llx waitq=%p wait_result=%d wmesg=%s user_suspended=%d continuation=%p",
+		valid_string(thread->name) ? thread->name : "-", thread->xnu_thread.state, (unsigned long long)thread->xnu_thread.wait_event,
+		(void*)thread->xnu_thread.waitq, thread->xnu_thread.wait_result, valid_string(thread->uu_wmesg) ? thread->uu_wmesg : "-",
+		thread->waiting_suspended, (void*)thread->xnu_thread.continuation);
+};
