@@ -44,6 +44,7 @@ namespace DarlingServer {
 
 	// iosc: дамп микропотоков по touch <prefix>/dump.req (src/dump.cpp)
 	void dumpThreads(int fd);
+	void dumpKqchans(int fd);
 	void startDumpWatcher(const char* prefix);
 
 	class Thread: public std::enable_shared_from_this<Thread>, public Loggable {

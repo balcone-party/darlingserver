@@ -97,6 +97,8 @@ namespace DarlingServer {
 		bool _startSuspended = false;
 		bool _pendingReplacement = false;
 		std::unordered_map<uintptr_t, std::shared_ptr<Kqchan>> _kqchannels;
+		friend void dumpThreads(int fd);  // iosc: src/dump.cpp
+		friend void dumpKqchans(int fd);
 		std::unordered_map<uintptr_t, std::weak_ptr<Kqchan::Process>> _listeningKqchannels;
 		dtape_semaphore_t* _dtapeForkWaitSemaphore;
 		Architecture _architecture;

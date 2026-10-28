@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <ipc/ipc_mqueue.h>
 #include <kern/thread.h>
+#include <ipc/ipc_space.h>
+#include <ipc/ipc_entry.h>
+#include <ipc/ipc_port.h>
 
 extern int filt_machportattach(struct knote *kn, struct kevent_qos_s *kev);
 extern void filt_machportdetach(struct knote *kn);
@@ -424,3 +427,55 @@ knote_set_error(struct knote *kn, int error)
 }
 
 // </copied>
+
+// iosc: состояние kqchan Mach-порта для дампа сервера (src/dump.cpp)
+void dtape_kqchan_mach_port_describe(dtape_kqchan_mach_port_t* kqchan, char* buf, size_t size) {
+	ipc_mqueue_t mq = kqchan->knote.kn_mqueue;
+	if (!mq) {
+		snprintf(buf, size, "mqueue=nil kn_status=%#x callback=%p", kqchan->knote.kn_status, kqchan->callback);
+		return;
+	}
+	bool set = imq_is_set(mq);
+	snprintf(buf, size, "set=%d msgcount=%u qlimit=%u fullwaiters=%d has_events=%d kn_status=%#x callback=%p waitq=%p",
+		set, set ? 0 : mq->imq_msgcount, set ? 0 : mq->imq_qlimit, set ? 0 : (int)mq->imq_fullwaiters,
+		dtape_kqchan_mach_port_has_events(kqchan), kqchan->knote.kn_status, kqchan->callback, kqchan->waitq);
+};
+
+// iosc: receive-права задачи с непустой очередью (для дампа сервера): имя, msgcount/qlimit,
+// есть ли knote (kqchan) на очереди. Без замков — снимок для отладки зависаний.
+void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const char* line), void* ctx) {
+	ipc_space_t space = task->xnu_task.itk_space;
+	if (!space || !is_active(space)) {
+		return;
+	}
+	ipc_entry_t table = space->is_table;
+	ipc_entry_num_t size = space->is_table_size;
+	for (ipc_entry_num_t i = 1; table && i < size; i++) {
+		ipc_entry_t e = &table[i];
+		if (!e->ie_object || !(IE_BITS_TYPE(e->ie_bits) & (MACH_PORT_TYPE_RECEIVE | MACH_PORT_TYPE_SEND))) {
+			continue;
+		}
+		ipc_port_t port = ip_object_to_port(e->ie_object);
+		ipc_mqueue_t mq = &port->ip_messages;
+		if (!(IE_BITS_TYPE(e->ie_bits) & MACH_PORT_TYPE_RECEIVE)) {
+			// send-право на порт с полной очередью: кто получатель (адрес и имя у него)
+			if (ip_active(port)
+				&& mq->imq_qlimit && mq->imq_msgcount >= mq->imq_qlimit) {
+				char line[160];
+				snprintf(line, sizeof(line), "send %#x -> ip=%p имя у получателя %#x msgcount=%u qlimit=%u",
+					MACH_PORT_MAKE(i, IE_BITS_GEN(e->ie_bits)), port, port->ip_receiver_name,
+					mq->imq_msgcount, mq->imq_qlimit);
+				out(ctx, line);
+			}
+			continue;
+		}
+		if (mq->imq_msgcount == 0 && ipc_kmsg_queue_empty(&mq->imq_messages)) {
+			continue;
+		}
+		char line[160];
+		snprintf(line, sizeof(line), "имя %#x ip=%p msgcount=%u qlimit=%u очередь=%s knote=%s",
+			MACH_PORT_MAKE(i, IE_BITS_GEN(e->ie_bits)), port, mq->imq_msgcount, mq->imq_qlimit,
+			ipc_kmsg_queue_empty(&mq->imq_messages) ? "пуста" : "есть", SLIST_EMPTY(&mq->imq_klist) ? "нет" : "есть");
+		out(ctx, line);
+	}
+};

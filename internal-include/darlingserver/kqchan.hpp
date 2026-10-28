@@ -27,8 +27,13 @@ namespace DarlingServer {
 	class Process;
 	class Thread;
 
+	void dumpThreads(int fd);
+	void dumpKqchans(int fd);
+
 	class Kqchan: public Loggable {
 		friend class DarlingServer::Process;
+		friend void dumpThreads(int fd);  // iosc: src/dump.cpp
+		friend void dumpKqchans(int fd);
 
 	protected:
 		uint64_t _debugID;
@@ -75,6 +80,8 @@ namespace DarlingServer {
 		uint64_t _receiveBufferSize;
 		uint64_t _savedFilterFlags;
 		dtape_kqchan_mach_port_t* _dtapeKqchan = nullptr;
+		friend void dumpThreads(int fd);  // iosc: src/dump.cpp
+		friend void dumpKqchans(int fd);
 
 		void _modify(uint64_t receiveBuffer, uint64_t receiveBufferSize, uint64_t savedFilterFlags, pid_t nstid);
 		void _read(uint64_t defaultBuffer, uint64_t defaultBufferSize, pid_t nstid);

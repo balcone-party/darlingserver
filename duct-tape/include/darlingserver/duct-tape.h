@@ -101,6 +101,8 @@ bool dtape_task_try_resume(dtape_task_t* task);
 void dtape_timer_fired(void);
 
 void dtape_kqchan_mach_port_modify(dtape_kqchan_mach_port_t* kqchan, uint64_t receive_buffer, uint64_t receive_buffer_size, uint64_t saved_filter_flags);
+void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const char* line), void* ctx);
+void dtape_kqchan_mach_port_describe(dtape_kqchan_mach_port_t* kqchan, char* buf, size_t size);
 void dtape_kqchan_mach_port_disable_notifications(dtape_kqchan_mach_port_t* kqchan);
 bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqchan_reply_mach_port_read_t* reply, uint64_t default_buffer, uint64_t default_buffer_size);
 bool dtape_kqchan_mach_port_has_events(dtape_kqchan_mach_port_t* kqchan);

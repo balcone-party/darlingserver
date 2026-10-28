@@ -12,6 +12,7 @@
 #include <darlingserver/process.hpp>
 #include <darlingserver/call.hpp>
 #include <darlingserver/duct-tape.h>
+#include <darlingserver/kqchan.hpp>
 
 #include <sys/inotify.h>
 #include <sys/stat.h>
@@ -46,6 +47,34 @@ static void printAddress(int fd, uintptr_t address) {
 		dprintf(fd, " exe+%#lx", (unsigned long)(address - base));
 	} else {
 		dprintf(fd, " %#lx", (unsigned long)address);
+	}
+};
+
+// iosc: kqchan Mach-портов каждого процесса — порт, флаги уведомлений, очередь в duct-tape
+void DarlingServer::dumpKqchans(int fd) {
+	for (auto& process: DarlingServer::processRegistry().copyEntries()) {
+		if (process->_dtapeTask) {
+			struct Ctx { int fd; pid_t pid, nspid; } c = { fd, process->id(), process->nsid() };
+			dtape_task_describe_ports(process->_dtapeTask, [](void* ctx, const char* line) {
+				auto c = static_cast<Ctx*>(ctx);
+				dprintf(c->fd, "порт процесс %d (ns %d) %s\n", c->pid, c->nspid, line);
+			}, &c);
+		}
+		std::shared_lock lock(process->_rwlock);
+		for (auto& [id, kq]: process->_kqchannels) {
+			auto mp = std::dynamic_pointer_cast<DarlingServer::Kqchan::MachPort>(kq);
+			if (!mp) {
+				continue;
+			}
+			char buf[256] = "";
+			if (mp->_dtapeKqchan) {
+				dtape_kqchan_mach_port_describe(mp->_dtapeKqchan, buf, sizeof(buf));
+			}
+			dprintf(fd, "kqchan %llu процесс %d (ns %d) порт %#x canSend=%d canSendNotification=%d defer=%d deferred=%d notifications=%llu %s\n",
+				(unsigned long long)mp->_debugID, process->id(), process->nsid(), mp->_port, mp->_canSend,
+				mp->_canSendNotification, mp->_deferNotification, mp->_deferredNotification.has_value(),
+				(unsigned long long)mp->_notificationCount, buf);
+		}
 	}
 };
 
@@ -114,6 +143,8 @@ void DarlingServer::dumpThreads(int fd) {
 			thread->_rwlock.unlock_shared();
 		}
 	}
+
+	dumpKqchans(fd);
 };
 
 void DarlingServer::startDumpWatcher(const char* prefix) {
