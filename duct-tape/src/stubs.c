@@ -210,7 +210,9 @@ kern_return_t kmod_get_info(host_t host, kmod_info_array_t* kmod_list, mach_msg_
 };
 
 kern_return_t kext_request(host_priv_t hostPriv, uint32_t clientLogSpec, vm_offset_t requestIn, mach_msg_type_number_t requestLengthIn, vm_offset_t* responseOut, mach_msg_type_number_t* responseLengthOut, vm_offset_t* logDataOut, mach_msg_type_number_t* logDataLengthOut, kern_return_t* op_result) {
-	dtape_stub_unsafe();
+	// reachable from userland now that root tasks get host_priv: no kexts, fail
+	dtape_stub_safe();
+	return KERN_NOT_SUPPORTED;
 };
 
 uint32_t PE_i_can_has_debugger(uint32_t* something) {

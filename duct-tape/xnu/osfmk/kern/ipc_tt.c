@@ -224,7 +224,14 @@ ipc_task_init(
 			task->exc_actions[i].privileged = FALSE;
 		}/* for */
 
+#ifdef __DARLING__
+		/* a task without a parent is the container's init (launchd) or a service started
+		 * next to it (iokitd): like init in XNU (root, set_security_token), it gets host_priv;
+		 * its children inherit itk_host below */
+		kr = host_get_host_priv_port(host_priv_self(), &port);
+#else
 		kr = host_get_host_port(host_priv_self(), &port);
+#endif
 		assert(kr == KERN_SUCCESS);
 		task->itk_host = port;
 

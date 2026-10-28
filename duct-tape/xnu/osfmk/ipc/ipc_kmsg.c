@@ -3820,6 +3820,12 @@ ipc_kmsg_copyin_body(
 			}
 
 			if ((size >= MSG_OOL_SIZE_SMALL) &&
+#ifdef __DARLING__
+			    /* msg_ool_size_small is 0 here (no kalloc_max_prerounded): an empty
+			     * descriptor would trip the overflow check below (x + 0 <= x); it needs
+			     * no kernel memory anyway (copyin maps it to a NULL address) */
+			    size != 0 &&
+#endif
 			    (daddr->out_of_line.copy == MACH_MSG_PHYSICAL_COPY) &&
 			    !(daddr->out_of_line.deallocate)) {
 				/*

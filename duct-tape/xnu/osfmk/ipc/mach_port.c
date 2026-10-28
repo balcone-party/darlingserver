@@ -2465,6 +2465,10 @@ mach_port_guard_exception(
 	mach_exception_subcode_t subcode = (uint64_t)portguard;
 	thread_t t = current_thread();
 	boolean_t fatal = FALSE;
+#ifdef __DARLING__
+	/* the guard exception isn't delivered to the client; at least make it visible */
+	kprintf("mach_port_guard_exception: name 0x%x reason 0x%x portguard 0x%llx\n", name, reason, portguard);
+#endif
 	if (t->task->task_exc_guard & TASK_EXC_GUARD_MP_FATAL) {
 		fatal = TRUE;
 	} else if (reason <= MAX_FATAL_kGUARD_EXC_CODE) {

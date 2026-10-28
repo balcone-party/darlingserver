@@ -1278,10 +1278,17 @@ kernel_get_special_port(host_priv_t host_priv, int id, ipc_port_t * portp)
  *      A special kernel port cannot be set up using this
  *      routine; use kernel_set_special_port() instead.
  */
+#ifdef __DARLING__
+/* there is no kernel IOKit: a userland server (iokitd) publishes the IO master port */
+#define DTAPE_USER_SETTABLE_KERNEL_PORT(id) ((id) == HOST_IO_MASTER_PORT)
+#else
+#define DTAPE_USER_SETTABLE_KERNEL_PORT(id) 0
+#endif
+
 kern_return_t
 host_set_special_port_from_user(host_priv_t host_priv, int id, ipc_port_t port)
 {
-	if (host_priv == HOST_PRIV_NULL || id <= HOST_MAX_SPECIAL_KERNEL_PORT || id > HOST_MAX_SPECIAL_PORT) {
+	if (host_priv == HOST_PRIV_NULL || (id <= HOST_MAX_SPECIAL_KERNEL_PORT && !DTAPE_USER_SETTABLE_KERNEL_PORT(id)) || id > HOST_MAX_SPECIAL_PORT) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -1299,7 +1306,7 @@ host_set_special_port_from_user(host_priv_t host_priv, int id, ipc_port_t port)
 kern_return_t
 host_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 {
-	if (host_priv == HOST_PRIV_NULL || id <= HOST_MAX_SPECIAL_KERNEL_PORT || id > HOST_MAX_SPECIAL_PORT) {
+	if (host_priv == HOST_PRIV_NULL || (id <= HOST_MAX_SPECIAL_KERNEL_PORT && !DTAPE_USER_SETTABLE_KERNEL_PORT(id)) || id > HOST_MAX_SPECIAL_PORT) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
