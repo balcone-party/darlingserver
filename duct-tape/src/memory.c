@@ -784,7 +784,8 @@ region_info_out:
 			return kr;
 		};
 		default:
-			dtape_stub_unsafe("Unimplemented flavor");
+			dtape_stub_safe("Unimplemented flavor");
+			return KERN_INVALID_ARGUMENT;
 	}
 };
 

@@ -26,6 +26,7 @@ dtape_kqchan_mach_port_t* dtape_kqchan_mach_port_create(dtape_task_t* owning_tas
 
 	kqchan->callback = notification_callback;
 	kqchan->context = context;
+	libsimple_lock_init(&kqchan->callback_lock);
 	kqchan->task = owning_task;
 
 	// keep a reference to the task
@@ -71,8 +72,21 @@ void dtape_kqchan_mach_port_modify(dtape_kqchan_mach_port_t* kqchan, uint64_t re
 };
 
 void dtape_kqchan_mach_port_disable_notifications(dtape_kqchan_mach_port_t* kqchan) {
+	libsimple_lock_lock(&kqchan->callback_lock);
 	kqchan->callback = NULL;
 	kqchan->context = NULL;
+	libsimple_lock_unlock(&kqchan->callback_lock);
+};
+
+// invoke the notification callback unless notifications were disabled; checking and calling
+// under the lock (another worker thread may disable them concurrently: the callback was
+// observed non-NULL and then called as NULL)
+static void kqchan_invoke_callback(dtape_kqchan_mach_port_t* kqchan) {
+	libsimple_lock_lock(&kqchan->callback_lock);
+	if (kqchan->callback) {
+		kqchan->callback(kqchan->context);
+	}
+	libsimple_lock_unlock(&kqchan->callback_lock);
 };
 
 bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqchan_reply_mach_port_read_t* reply, uint64_t default_buffer, uint64_t default_buffer_size) {
@@ -142,10 +156,6 @@ static void knote_post(struct knote* kn, long hint) {
 
 	dtape_log_debug("%s: kn=%p, kqchan=%p, kqchan->callback=%p", __FUNCTION__, kn, kqchan, kqchan->callback);
 
-	if (!kqchan->callback) {
-		return;
-	}
-
 #if 0
 	if (!dtape_kqchan_mach_port_has_events(kqchan)) {
 		return;
@@ -154,7 +164,7 @@ static void knote_post(struct knote* kn, long hint) {
 
 	dtape_log_debug("%s: kn=%p, kqchan=%p; invoking callback...", __FUNCTION__, kn, kqchan);
 
-	kqchan->callback(kqchan->context);
+	kqchan_invoke_callback(kqchan);
 };
 
 void knote(struct klist* list, long hint) {
@@ -197,7 +207,7 @@ static void kqchan_waitq_waiter_entry(void* context, wait_result_t wait_result) 
 			break;
 		} else {
 			if (filt_machportpeek(&kqchan->knote) & FILTER_ACTIVE) {
-				kqchan->callback(kqchan->context);
+				kqchan_invoke_callback(kqchan);
 			}
 			// wait until it's read
 			if (!dtape_semaphore_down_simple(kqchan->waiter_read_semaphore)) {

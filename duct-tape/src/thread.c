@@ -1484,7 +1484,10 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 		};
 
 		default:
-			dtape_stub_unsafe("Unimplemented flavor");
+			// like XNU for flavors it doesn't know: an error for the caller, not a server abort
+			// (iOS 27 clients ask for newer flavors, e.g. THREAD_EXTENDED_INFO)
+			dtape_stub_safe("Unimplemented flavor");
+			return KERN_INVALID_ARGUMENT;
 	}
 };
 

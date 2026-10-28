@@ -7,6 +7,7 @@
 #include <sys/event.h>
 #include <sys/eventvar.h>
 #include <kern/waitq.h>
+#include <libsimple/lock.h>
 
 #include <darlingserver/duct-tape.h>
 
@@ -19,6 +20,9 @@ struct dtape_kqchan_mach_port {
 	struct knote knote;
 	dtape_kqchan_mach_port_notification_callback_f callback;
 	void* context;
+	// held while the callback runs and while notifications are disabled, so that disabling
+	// waits for an in-flight callback (the owner frees `context` right after disabling)
+	libsimple_lock_t callback_lock;
 	thread_t waiter_thread;
 	struct waitq* waitq;
 	dtape_semaphore_t* waiter_death_semaphore;

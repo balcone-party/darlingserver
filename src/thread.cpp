@@ -1067,6 +1067,24 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 	std::optional<Message> reply = std::nullopt;
 	bool usingInterrupt = false;
 
+	// a microthread impersonating this thread (e.g. handling a kqchan read) keeps it deferred,
+	// so the thread could never process the S2C call (s2c_perform) we're about to ask it for.
+	// stop impersonating while we perform the call and resume impersonating afterwards.
+	struct ImpersonationPause {
+		std::shared_ptr<Thread> impersonator;
+		std::shared_ptr<Thread> target;
+		~ImpersonationPause() {
+			if (impersonator) {
+				impersonator->impersonate(target);
+			}
+		};
+	} pause;
+	if (auto current = currentThread(); current && current.get() != this && current->impersonatingThread().get() == this) {
+		pause.impersonator = current;
+		pause.target = shared_from_this();
+		current->impersonate(nullptr);
+	}
+
 	// make sure we're the only one performing an S2C call on this thread
 	if (!dtape_semaphore_down_simple(_s2cPerformSempahore)) {
 		// got interrupted while waiting
