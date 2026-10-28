@@ -56,6 +56,11 @@ void dtape_kqchan_mach_port_destroy(dtape_kqchan_mach_port_t* kqchan) {
 		panic("Duct-taped Mach port kqchan over-retained or still in-use at destruction");
 	}
 
+	// the callback that disabled notifications (see below) may still be returning on another
+	// worker thread with the lock held; wait for it before freeing
+	libsimple_lock_lock(&kqchan->callback_lock);
+	libsimple_lock_unlock(&kqchan->callback_lock);
+
 	filt_machportdetach(&kqchan->knote);
 
 	task_deallocate(&kqchan->task->xnu_task);
@@ -71,7 +76,17 @@ void dtape_kqchan_mach_port_modify(dtape_kqchan_mach_port_t* kqchan, uint64_t re
 	filt_machporttouch(&kqchan->knote, &kev);
 };
 
+// kqchan whose callback this worker thread is running (and holds its lock)
+static _Thread_local dtape_kqchan_mach_port_t* invoking_kqchan;
+
 void dtape_kqchan_mach_port_disable_notifications(dtape_kqchan_mach_port_t* kqchan) {
+	if (invoking_kqchan == kqchan) {
+		// called from within the callback itself (e.g. the notification drops the last
+		// reference on the kqchan and its destructor lands here); we already hold the lock
+		kqchan->callback = NULL;
+		kqchan->context = NULL;
+		return;
+	}
 	libsimple_lock_lock(&kqchan->callback_lock);
 	kqchan->callback = NULL;
 	kqchan->context = NULL;
@@ -84,7 +99,10 @@ void dtape_kqchan_mach_port_disable_notifications(dtape_kqchan_mach_port_t* kqch
 static void kqchan_invoke_callback(dtape_kqchan_mach_port_t* kqchan) {
 	libsimple_lock_lock(&kqchan->callback_lock);
 	if (kqchan->callback) {
+		dtape_kqchan_mach_port_t* prev = invoking_kqchan;
+		invoking_kqchan = kqchan;
 		kqchan->callback(kqchan->context);
+		invoking_kqchan = prev;
 	}
 	libsimple_lock_unlock(&kqchan->callback_lock);
 };
