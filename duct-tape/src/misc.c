@@ -86,7 +86,26 @@ ssize_t getrandom(void* buf, size_t buflen, unsigned int flags);
 #endif
 
 
+// Порог как у Log (src/logging.cpp, DSERVER_LOG_LEVEL; по умолчанию error): ниже — не
+// форматируем вовсе (vsnprintf и сборка строки в хуке стоили ~10% CPU сервера).
+extern char* getenv(const char* name);  // libc хоста (сборка без stdlib.h)
+
+static int dtape_log_min_level(void) {
+	static int min = -1;
+	if (min < 0) {
+		const char* v = getenv("DSERVER_LOG_LEVEL");
+		min = dtape_log_level_error;
+		if (v && !strncmp(v, "warn", 4)) min = dtape_log_level_warning;
+		else if (v && !strncmp(v, "info", 4)) min = dtape_log_level_info;
+		else if (v && !strncmp(v, "debug", 5)) min = dtape_log_level_debug;
+	}
+	return min;
+};
+
 void dtape_logv(dtape_log_level_t level, const char* format, va_list args) {
+	if ((int)level < dtape_log_min_level()) {
+		return;
+	}
 	char message[4096];
 	vsnprintf(message, sizeof(message), format, args);
 	dtape_hooks->log(level, message);
