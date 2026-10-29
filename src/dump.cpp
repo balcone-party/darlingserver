@@ -7,6 +7,7 @@
  * Адреса внутри исполняемого файла печатаются как exe+0x… (для addr2line).
  */
 
+#include <darlingserver/calltrace.hpp>
 #include <darlingserver/registry.hpp>
 #include <darlingserver/thread.hpp>
 #include <darlingserver/process.hpp>
@@ -186,6 +187,20 @@ void DarlingServer::startDumpWatcher(const char* prefix) {
 				continue;
 			}
 			dumpThreads(fd);
+			{
+				// кольцо событий вызовов (calltrace.hpp), от старых к новым
+				uint64_t end = CallTrace::next.load(), begin = end > CallTrace::kSize ? end - CallTrace::kSize : 0;
+				dprintf(fd, "trace: %llu событий\n", (unsigned long long)end);
+				for (uint64_t i = begin; i < end; i++) {
+					auto& e = CallTrace::ring[i % CallTrace::kSize];
+					// редкие события — из всего кольца, остальные — последние 50 тыс.
+					if (end - i > 50000 && !strchr("kKnxspabcr", e.ev)) {
+						continue;
+					}
+					dprintf(fd, "trace %llu.%09llu %c pid %d tid %d num %u x %llu\n", (unsigned long long)(e.ns / 1000000000ull),
+						(unsigned long long)(e.ns % 1000000000ull), e.ev, e.pid, e.tid, e.num, (unsigned long long)e.extra);
+				}
+			}
 			close(fd);
 		}
 	}).detach();

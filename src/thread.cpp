@@ -18,6 +18,7 @@
  */
 
 #include "darlingserver/registry.hpp"
+#include <darlingserver/calltrace.hpp>
 #include <darlingserver/thread.hpp>
 #include <darlingserver/process.hpp>
 #include <darlingserver/call.hpp>
@@ -328,6 +329,7 @@ void DarlingServer::Thread::setPendingCall(std::shared_ptr<Call> newPendingCall)
 			// so we need to handle this case gracefully. we do so by saving the interrupt and scheduling
 			// it to be processed once the pending call becomes active and suspends or exits.
 			_pendingInterrupts.push(newPendingCall);
+			CallTrace::add('i', -1, _nstid, (uint32_t)newPendingCall->number());
 			return;
 		} else {
 			throw std::runtime_error("Thread's pending call overwritten while active");
@@ -343,6 +345,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Thread::activeCall() const {
 
 void DarlingServer::Thread::makePendingCallActive() {
 	std::unique_lock lock(_rwlock);
+	CallTrace::add('A', -1, _nstid, _pendingCall ? (uint32_t)_pendingCall->number() : 0);
 	_activeCall = _pendingCall;
 	_pendingCall = nullptr;
 };
@@ -455,7 +458,9 @@ void DarlingServer::Thread::doWork() {
 
 	_rwlock.lock();
 
+	CallTrace::add('W', -1, _nstid, 0);
 	if (_deferralState != DeferralState::NotDeferred) {
+		CallTrace::add('d', -1, _nstid, 0);
 		microthreadLog.debug() << _tid << "(" << _nstid << "): execution was deferred" << microthreadLog.endLog;
 		_deferralState = DeferralState::DeferredPending;
 		_rwlock.unlock();
@@ -463,6 +468,7 @@ void DarlingServer::Thread::doWork() {
 	}
 
 	if (_running) {
+		CallTrace::add('r', -1, _nstid, 0);
 		// this is probably an error
 		microthreadLog.warning() << _tid << "(" << _nstid << "): attempt to re-run already running microthread on another thread" << microthreadLog.endLog;
 		_rwlock.unlock();
@@ -470,6 +476,7 @@ void DarlingServer::Thread::doWork() {
 	}
 
 	if (_terminating) {
+		CallTrace::add('t', -1, _nstid, 0);
 		goto doneWorking;
 	}
 
@@ -601,6 +608,16 @@ doneWorking:
 		currentThreadVar = nullptr;
 		_running = false;
 	}
+	if (!_suspended) {
+		_pendingResume = false;  // вызов завершён без ожидания — пробуждение не относится к следующему
+	}
+	if (_rescheduleWhenStopped) {
+		_rescheduleWhenStopped = false;
+		if (_suspended && !_terminating && !_dead) {
+			CallTrace::add('r', -1, _nstid, 0, 1);  // x=1: отложенный resume выполнен
+			Server::sharedInstance().scheduleThread(shared_from_this());
+		}
+	}
 	bool canRelease = false;
 	if (_dead) {
 		threadLog.debug() << *this << ": dead thread returning. active call? " << (!!_activeCall ? "true" : "false") << " terminating? " << (_terminating ? "true" : "false") << threadLog.endLog;
@@ -653,6 +670,16 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 	}
 
 	_rwlock.lock();
+	if (_pendingResume) {
+		// пробуждение уже пришло (см. resume()) — не засыпаем
+		_pendingResume = false;
+		_rwlock.unlock();
+		CallTrace::add('r', -1, _nstid, 0, 2);
+		if (unlockMe) {
+			libsimple_lock_unlock(unlockMe);
+		}
+		return;
+	}
 	_suspended = true;
 	_rwlock.unlock();
 
@@ -696,9 +723,21 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 
 void DarlingServer::Thread::resume() {
 	{
-		std::shared_lock lock(_rwlock);
+		std::unique_lock lock(_rwlock);
 		if (!_suspended) {
-			// maybe we should throw an error here?
+			// iosc: поток выполняется и ещё не приостановлен — пробуждение для ожидания, которое
+			// он вот-вот начнёт (thread_block после assert_wait); запомнить для suspend()
+			if (_running) {
+				_pendingResume = true;
+			}
+			return;
+		}
+		if (_running) {
+			// iosc: suspend() уже поставил _suspended, но микропоток ещё не вернулся на вершину.
+			// doWork() сейчас увидел бы _running и выбросил бы пробуждение (так терялись ответы
+			// на чтение kqchan: semaphore_signal вне микропотока будил исполнителя kernelAsync в
+			// этот момент) — перепланирует doneWorking, когда поток остановится.
+			_rescheduleWhenStopped = true;
 			return;
 		}
 	}
@@ -890,11 +929,13 @@ static void kernelAsyncRunnerThreadWorker(bool permanent, std::shared_ptr<Darlin
 
 		auto func = kernelAsyncRunnerQueue.front();
 		kernelAsyncRunnerQueue.pop();
+		DarlingServer::CallTrace::add('b', -1, -1, (uint32_t)kernelAsyncRunnerQueue.size(), (uint64_t)self.get());
 
 		libsimple_lock_unlock(&kernelAsyncRunnerQueueLock);
 
 		// perform the work
 		func();
+		DarlingServer::CallTrace::add('c', -1, -1, 0, (uint64_t)self.get());
 	} while (permanent);
 
 	self = nullptr;
@@ -910,6 +951,7 @@ void DarlingServer::Thread::kernelAsync(std::function<void()> fn) {
 
 	libsimple_lock_lock(&kernelAsyncRunnerQueueLock);
 	kernelAsyncRunnerQueue.push(fn);
+	CallTrace::add('a', -1, -1, (uint32_t)kernelAsyncRunnerQueue.size(), kernelAsyncRunnersAvailable);
 	// a runner counts as available until it wakes up and takes work, so with several pushes in a row
 	// "available != 0" can cover fewer runners than queued items. if the runner that does wake up then
 	// blocks (e.g. sending to a full queue), the remaining items (e.g. a kqchan read reply) would wait

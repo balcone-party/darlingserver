@@ -1,3 +1,4 @@
+#include <darlingserver/calltrace.hpp>
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/server.hpp>
 #include <darlingserver/rpc-supplement.h>
@@ -145,6 +146,7 @@ int DarlingServer::Kqchan::setup() {
 };
 
 void DarlingServer::Kqchan::_sendNotification() {
+	CallTrace::add('n', -1, -1, 0, (uint64_t)this);
 	std::unique_lock lock(_notificationMutex);
 
 	kqchanLog.debug() << *this << ": received request to send notification" << kqchanLog.endLog;
@@ -343,6 +345,7 @@ void DarlingServer::Kqchan::MachPort::_modify(uint64_t receiveBuffer, uint64_t r
 };
 
 void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t defaultBufferSize, pid_t nstid) {
+	CallTrace::add('k', -1, nstid, 0, (uint64_t)this);
 	kqchanMachPortLog.debug() << *this << ": received read request with {defaultBuffer=" << defaultBuffer << ",defaultBufferSize=" << defaultBufferSize << "}" << kqchanMachPortLog.endLog;
 
 	{
@@ -396,6 +399,7 @@ void DarlingServer::Kqchan::MachPort::_read(uint64_t defaultBuffer, uint64_t def
 		}
 		Thread::currentThread()->impersonate(nullptr);
 
+		CallTrace::add('K', -1, thread->nsid(), reply->header.code, (uint64_t)self.get());
 		self->_outbox.push(std::move(msg));
 
 		// now let's send any deferred notifications we might have

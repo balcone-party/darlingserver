@@ -18,6 +18,7 @@
  */
 
 #define _GNU_SOURCE 1
+#include <darlingserver/calltrace.hpp>
 #include <darlingserver/call.hpp>
 #include <darlingserver/server.hpp>
 #include <sys/uio.h>
@@ -33,12 +34,15 @@ static DarlingServer::Log callLog("calls");
 
 DarlingServer::Log DarlingServer::Call::rpcReplyLog("replies");
 
+static uint64_t traceAddr(const DarlingServer::Address& a);
+
 std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Message&& requestMessage) {
 	if (requestMessage.data().size() < sizeof(dserver_rpc_callhdr_t)) {
 		throw std::invalid_argument("Message buffer was too small for call header");
 	}
 
 	dserver_rpc_callhdr_t* header = reinterpret_cast<dserver_rpc_callhdr_t*>(requestMessage.data().data());
+	CallTrace::add('R', header->pid, header->tid, header->number, traceAddr(requestMessage.address()));
 	std::shared_ptr<Call> result = nullptr;
 	std::shared_ptr<Process> process = nullptr;
 	std::shared_ptr<Thread> thread = nullptr;
@@ -95,6 +99,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		});
 
 		if (!process) {
+			CallTrace::add('x', header->pid, header->tid, header->number, 1);
 			callLog.error() << "Received call from non-existent process?" << callLog.endLog;
 
 			// ignore this call
@@ -124,6 +129,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		});
 
 		if (!thread) {
+			CallTrace::add('x', header->pid, header->tid, header->number, 2);
 			callLog.error() << "Received call from non-existent thread?" << callLog.endLog;
 
 			// ignore this call
@@ -144,6 +150,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 	if (header->number == dserver_callnum_s2c) {
 		// this is an S2C reply
+		CallTrace::add('s', header->pid, header->tid, header->number);
 
 		{
 			std::unique_lock lock(thread->_rwlock);
@@ -161,6 +168,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 	} else if (header->number == dserver_callnum_push_reply) {
 		// this is a reply push
 		// (used to send interrupted replies back to the server)
+		CallTrace::add('p', header->pid, header->tid, header->number);
 
 		auto pushReplyCall = reinterpret_cast<const dserver_rpc_call_push_reply_t*>(requestMessage.data().data());
 		Message replyToSave(pushReplyCall->reply_size, 0);
@@ -231,6 +239,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 	if (thread) {
 		thread->setPendingCall(result);
+		CallTrace::add('P', header->pid, header->tid, header->number);
 		return result;
 	} else {
 		Thread::kernelAsync([result]() {
@@ -268,7 +277,21 @@ bool DarlingServer::Call::isBSDTrap() const {
 	return false;
 };
 
+// хеш адреса сокета клиента (у каждого потока свой) — связать ответ с вызовом в трассировке
+static uint64_t traceAddr(const DarlingServer::Address& a) {
+	uint64_t h = 1469598103934665603ull;
+	const uint8_t* b = reinterpret_cast<const uint8_t*>(&a.raw());
+	for (size_t i = 0; i < a.rawSize(); i++) {
+		h = (h ^ b[i]) * 1099511628211ull;
+	}
+	return h;
+}
+
 void DarlingServer::Call::sendReply(Message&& reply) {
+	if (reply.data().size() >= sizeof(dserver_rpc_replyhdr_t)) {
+		auto r = reinterpret_cast<const dserver_rpc_replyhdr_t*>(reply.data().data());
+		CallTrace::add('S', -1, r->code, r->number, traceAddr(reply.address()));
+	}
 	Server::sharedInstance().sendMessage(std::move(reply));
 };
 

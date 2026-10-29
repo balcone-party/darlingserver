@@ -18,6 +18,7 @@
  */
 
 #include <cstdint>
+#include <darlingserver/calltrace.hpp>
 #include <darlingserver/server.hpp>
 #include <sys/socket.h>
 #include <stdexcept>
@@ -540,7 +541,9 @@ void DarlingServer::Server::start() {
 				// TODO: this could be done concurrently
 				auto call = DarlingServer::Call::callFromMessage(std::move(*msg));
 				if (call) {
-					_workQueue.push(call->thread());
+					auto t = call->thread();
+					CallTrace::add('Q', -1, t ? t->nsid() : -1, (uint32_t)call->number());
+					_workQueue.push(t);
 				}
 			}
 		}

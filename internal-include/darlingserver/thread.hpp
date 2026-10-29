@@ -90,6 +90,12 @@ namespace DarlingServer {
 		dtape_thread_t* _dtapeThread;
 		std::function<void()> _continuationCallback = nullptr;
 		bool _running = false;
+		// iosc: resume() пришёл, пока микропоток ещё выполнялся (suspend до возврата на вершину) —
+		// перепланировать в doneWorking, иначе пробуждение терялось
+		bool _rescheduleWhenStopped = false;
+		// iosc: resume() до suspend() (пробуждение между assert_wait и thread_block: duct-tape
+		// thread_block отпускает блокировку потока до suspend) — следующий suspend() не засыпает
+		bool _pendingResume = false;
 		bool _terminating = false;
 		std::shared_ptr<Call> _activeCall = nullptr;
 		std::shared_ptr<Thread> _impersonating = nullptr;

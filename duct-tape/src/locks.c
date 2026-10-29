@@ -56,7 +56,7 @@ void dtape_mutex_lock(dtape_mutex_t* mutex) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 
 	if (!thread) {
-		dtape_log_warning("Trying to lock mutex without an active thread!");
+		dtape_log_debug("Trying to lock mutex without an active thread!");  // штатный путь (вызов вне микропотока), ~2000/с
 		// if we don't have an active thread, we fall back to using the queue lock (which is a native lock).
 		// note that this means that any microthreads that want to lock the lock will sleep for real!
 		// therefore, callers that try to do this must only lock the lock for short periods
@@ -102,7 +102,7 @@ bool dtape_mutex_try_lock(dtape_mutex_t* mutex) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 
 	if (!thread) {
-		dtape_log_warning("Trying to lock mutex without an active thread!");
+		dtape_log_debug("Trying to lock mutex without an active thread!");
 		// see lck_mtx_lock()
 		if (libsimple_lock_try_lock(&mutex->dtape_queue_lock)) {
 			if (mutex->dtape_owner == 0) {
@@ -132,7 +132,7 @@ void dtape_mutex_unlock(dtape_mutex_t* mutex) {
 	dtape_thread_t* curr_thread = dtape_thread_for_xnu_thread(xcurr_thread);
 
 	if (!curr_thread) {
-		dtape_log_warning("Trying to unlock mutex without an active thread!");
+		dtape_log_debug("Trying to unlock mutex without an active thread!");
 		// see lck_mtx_lock()
 		return libsimple_lock_unlock(&mutex->dtape_queue_lock);
 	}
