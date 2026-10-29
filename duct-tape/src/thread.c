@@ -464,10 +464,16 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 	//         2. we can register the signalfd only when we receive a signal, since we only need to check for pending signals during sigprocess,
 	//            but this means signal processing incurs an additional delay.
 
-	while (thread->xnu_thread.suspend_count > 0) {
+	for (;;) {
 		dtape_log_debug("sigexc: going to sleep");
 
+		// счётчик и флаг парковки — под одним мьютексом с thread_release: иначе тот мог
+		// уменьшить счётчик и не застать флаг, и поток засыпал навсегда
 		dtape_mutex_lock(&thread->suspension_mutex);
+		if (thread->xnu_thread.suspend_count <= 0) {
+			dtape_mutex_unlock(&thread->suspension_mutex);
+			break;
+		}
 		thread->waiting_suspended = true;
 		dtape_mutex_unlock(&thread->suspension_mutex);
 		dtape_condvar_signal(&thread->suspension_condvar, SIZE_MAX);
@@ -591,8 +597,17 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
 	thread->xnu_thread.parameter = parameter;
 
 	bool waiting = thread->xnu_thread.state & TH_WAIT;
+	bool held = thread->xnu_thread.suspend_count > 0;
 
 	thread_unlock(&thread->xnu_thread);
+
+	// Поток засыпает в ядре, а его ждёт thread_suspend (thread_wait): для XNU он уже не
+	// выполняется — будим ждущего (см. thread_wait).
+	if (waiting && held) {
+		dtape_mutex_lock(&thread->suspension_mutex);
+		dtape_mutex_unlock(&thread->suspension_mutex);
+		dtape_condvar_signal(&thread->suspension_condvar, SIZE_MAX);
+	}
 
 	if (waiting) {
 		dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, NULL);
@@ -1614,14 +1629,26 @@ void thread_hold(thread_t xthread) {
 void thread_release(thread_t xthread) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 	dtape_log_debug("sigexc: thread_release(%p)\n", xthread);
+	dtape_mutex_lock(&thread->suspension_mutex);
 	xthread->suspend_count--;
-	dtape_hooks->thread_resume(thread->context);
+	// Будим только поток, запаркованный приостановкой (dtape_thread_wait_while_user_suspended).
+	// Спящего в ядре (thread_wait его теперь не ждёт — TH_WAIT) будить нельзя: он проснулся бы
+	// посреди ipc_mqueue_receive с wait_result THREAD_WAITING — паника «strange wait_result».
+	bool parked = thread->waiting_suspended;
+	dtape_mutex_unlock(&thread->suspension_mutex);
+	if (parked)
+		dtape_hooks->thread_resume(thread->context);
 };
 
 void thread_wait(thread_t xthread, boolean_t until_not_runnable) {
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
+	// Как XNU thread_wait(until_not_runnable = FALSE): достаточно, что поток не выполняется.
+	// Спящий в ядре (TH_WAIT: приём mach_msg, семафор…) — уже «остановлен»; сигнал
+	// приостановки он обработает, выйдя из вызова, и до thread_resume в код не вернётся.
+	// Раньше ждали только отчёта по сигналу, а у потока, ждущего ответа сервера, сигналы
+	// заблокированы — thread_suspend (libpas scavenger в WebKit) висел навсегда.
 	dtape_mutex_lock(&thread->suspension_mutex);
-	while (!thread->waiting_suspended) {
+	while (!thread->waiting_suspended && !(thread->xnu_thread.state & TH_WAIT)) {
 		dtape_condvar_wait(&thread->suspension_condvar, &thread->suspension_mutex);
 	}
 	dtape_mutex_unlock(&thread->suspension_mutex);
