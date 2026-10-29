@@ -910,7 +910,11 @@ void DarlingServer::Thread::kernelAsync(std::function<void()> fn) {
 
 	libsimple_lock_lock(&kernelAsyncRunnerQueueLock);
 	kernelAsyncRunnerQueue.push(fn);
-	if (kernelAsyncRunnersAvailable == 0) {
+	// a runner counts as available until it wakes up and takes work, so with several pushes in a row
+	// "available != 0" can cover fewer runners than queued items. if the runner that does wake up then
+	// blocks (e.g. sending to a full queue), the remaining items (e.g. a kqchan read reply) would wait
+	// for an unrelated future kernelAsync call; the client waits for that reply forever.
+	if (kernelAsyncRunnersAvailable < kernelAsyncRunnerQueue.size()) {
 		// we need to get some work done, but there are no workers available.
 		// if we have less workers than the max permanent number of workers,
 		// let's spawn a permanent worker. otherwise, just spawn a temporary worker.
