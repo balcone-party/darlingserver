@@ -13,6 +13,7 @@
 #include <kern/ipc_host.h>
 #include <kern/sync_sema.h>
 #include <kern/ux_handler.h>
+#include <ipc/ipc_eventlink.h>
 
 struct task_id_token {
 	struct proc_ident ident;
@@ -27,6 +28,7 @@ extern lck_spin_t ipc_importance_lock_data;
 extern zone_t ipc_importance_task_zone;
 extern zone_t semaphore_zone;
 extern zone_t task_id_token_zone;
+extern zone_t ipc_eventlink_zone;
 
 void ipc_table_init(void);
 void ipc_init(void);
@@ -60,6 +62,7 @@ void dtape_init(const dtape_hooks_t* hooks) {
 	ipc_importance_inherit_zone = zone_create("ipc importance inherit", sizeof(struct ipc_importance_inherit), ZC_NOENCRYPT);
 
 	task_id_token_zone = zone_create("task_id_token", sizeof(struct task_id_token), ZC_ZFREE_CLEARMEM);
+	ipc_eventlink_zone = zone_create("ipc_eventlink", sizeof(struct ipc_eventlink_base), ZC_NONE);
 
 	lck_mtx_init(&realhost.lock, LCK_GRP_NULL, LCK_ATTR_NULL);
 	lck_spin_init(&ipc_importance_lock_data, LCK_GRP_NULL, LCK_ATTR_NULL);
