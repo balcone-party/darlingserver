@@ -23,6 +23,7 @@
 #include <sys/types.h>
 #include <memory>
 #include <vector>
+#include <atomic>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -88,6 +89,9 @@ namespace DarlingServer {
 		pid_t _nspid;
 		EternalID _eid;
 		std::shared_ptr<FD> _pidfd;
+		// /proc/<pid>/mem, opened on first access: the ptrace access check happens once at open
+		// instead of on every process_vm_readv/writev (copyin/copyout of every message)
+		mutable std::atomic<int> _memFD{-2};
 		mutable std::shared_mutex _rwlock;
 		std::unordered_map<uint64_t, std::weak_ptr<Thread>> _threads;
 		std::string _cachedVchrootPath;

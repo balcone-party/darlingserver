@@ -23,6 +23,7 @@
 #include <string>
 #include <sys/epoll.h>
 #include <thread>
+#include <unordered_map>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/workers.hpp>
@@ -50,7 +51,8 @@ namespace DarlingServer {
 		int _timerFD;
 		uint64_t _currentTimerDeadline = 0;
 		std::mutex _timerLock;
-		std::vector<std::shared_ptr<Monitor>> _monitors;
+		// by address: every epoll event checks that its monitor is still alive (thousands of kqchan monitors)
+		std::unordered_map<Monitor*, std::shared_ptr<Monitor>> _monitors;
 		std::vector<std::shared_ptr<Monitor>> _monitorsWaitingToDie;
 		std::mutex _monitorsLock;
 

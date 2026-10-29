@@ -21,6 +21,7 @@
 #include <darlingserver/registry.hpp>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/uio.h>
 #include <darlingserver/logging.hpp>
 
@@ -109,6 +110,10 @@ DarlingServer::Process::Process(KernelProcessConstructorTag tag):
 
 DarlingServer::Process::~Process() {
 	processLog.info() << *this << ": process being destroyed" << processLog.endLog;
+	int fd = _memFD.load();
+	if (fd >= 0) {
+		close(fd);
+	}
 };
 
 DarlingServer::Process::ID DarlingServer::Process::id() const {
@@ -219,6 +224,39 @@ bool DarlingServer::Process::_readOrWriteMemory(bool isWrite, uintptr_t remoteAd
 			*errorCode = ESRCH;
 		}
 		return false;
+	}
+
+	// fast path: /proc/<pid>/mem (opened once; -1 — couldn't open, use process_vm_*)
+	int memFD = _memFD.load(std::memory_order_acquire);
+	if (memFD == -2) {
+		char path[64];
+		snprintf(path, sizeof(path), "/proc/%d/mem", id());
+		int fd = open(path, O_RDWR | O_CLOEXEC);
+		int expected = -2;
+		if (_memFD.compare_exchange_strong(expected, fd < 0 ? -1 : fd)) {
+			memFD = fd < 0 ? -1 : fd;
+		} else {
+			if (fd >= 0) {
+				close(fd);
+			}
+			memFD = expected;
+		}
+	}
+	if (memFD >= 0) {
+		ssize_t r = isWrite ? pwrite(memFD, localBuffer, length, (off_t)remoteAddress) : pread(memFD, localBuffer, length, (off_t)remoteAddress);
+		if (r >= 0 || errno != EIO) {
+			if (r < 0) {
+				int code = errno;
+				processMemoryAccessLog.error() << "Failed to " << (isWrite ? "write " : "read ") << length << " byte(s) at 0x" << std::hex << remoteAddress << std::dec << " in process " << id() << " (" << nsid() << "): " << code << processMemoryAccessLog.endLog;
+				if (errorCode) {
+					*errorCode = code;
+				}
+				return false;
+			}
+			// like process_vm_*: a short transfer still counts as success
+			return true;
+		}
+		// EIO — unmapped address; process_vm_* reports EFAULT: take that path for the same result
 	}
 
 	local.iov_base = localBuffer;

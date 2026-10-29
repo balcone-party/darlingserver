@@ -619,11 +619,9 @@ void DarlingServer::Server::start() {
 
 				// check whether the monitor is still valid
 				_monitorsLock.lock();
-				for (const auto& mon: _monitors) {
-					if (mon.get() == monitor) {
-						aliveMonitor = mon;
-						break;
-					}
+				auto it = _monitors.find(monitor);
+				if (it != _monitors.end()) {
+					aliveMonitor = it->second;
 				}
 				_monitorsLock.unlock();
 
@@ -695,11 +693,8 @@ void DarlingServer::Server::addMonitor(std::shared_ptr<Monitor> monitor) {
 	bool valid = true;
 
 	_monitorsLock.lock();
-	for (size_t i = 0; i < _monitors.size(); ++i) {
-		if (_monitors[i].get() == monitor.get()) {
-			valid = false;
-			break;
-		}
+	if (_monitors.count(monitor.get())) {
+		valid = false;
 	}
 
 	if (!valid) {
@@ -722,7 +717,7 @@ void DarlingServer::Server::addMonitor(std::shared_ptr<Monitor> monitor) {
 
 	monitor->_lock.unlock();
 
-	_monitors.push_back(monitor);
+	_monitors.emplace(monitor.get(), monitor);
 
 	_monitorsLock.unlock();
 };
@@ -731,13 +726,11 @@ void DarlingServer::Server::removeMonitor(std::shared_ptr<Monitor> monitor) {
 	bool valid = false;
 
 	_monitorsLock.lock();
-	for (size_t i = 0; i < _monitors.size(); ++i) {
-		if (_monitors[i].get() == monitor.get()) {
-			valid = true;
-			_monitorsWaitingToDie.push_back(monitor);
-			_monitors.erase(_monitors.begin() + i);
-			break;
-		}
+	auto it = _monitors.find(monitor.get());
+	if (it != _monitors.end()) {
+		valid = true;
+		_monitorsWaitingToDie.push_back(monitor);
+		_monitors.erase(it);
 	}
 
 	if (!valid) {
