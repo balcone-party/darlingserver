@@ -1534,8 +1534,19 @@ DarlingServer::Thread::RunState DarlingServer::Thread::getRunState() const {
 };
 
 void DarlingServer::Thread::waitWhileUserSuspended(uintptr_t threadStateAddress, uintptr_t floatStateAddress) {
-	loadStateFromUser(threadStateAddress, floatStateAddress);
+	bool haveState = true;
+	try {
+		loadStateFromUser(threadStateAddress, floatStateAddress);
+	} catch (std::system_error e) {
+		// same as below: the process died (or exec'd) right after the suspend signal.
+		// throwing here would abort the whole server; just skip the state round-trip.
+		threadLog.warning() << *this << ": failed to load state from user in waitWhileUserSuspended: " << e.code() << " (" << e.what() << ")" << threadLog.endLog;
+		haveState = false;
+	}
 	dtape_thread_wait_while_user_suspended(_dtapeThread);
+	if (!haveState) {
+		return;
+	}
 	try {
 		saveStateToUser(threadStateAddress, floatStateAddress);
 	} catch (std::system_error e) {
