@@ -472,10 +472,13 @@ void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const 
 		if (mq->imq_msgcount == 0 && ipc_kmsg_queue_empty(&mq->imq_messages)) {
 			continue;
 		}
-		char line[160];
-		snprintf(line, sizeof(line), "имя %#x ip=%p msgcount=%u qlimit=%u очередь=%s knote=%s",
+		char line[224];
+		ipc_kmsg_t first = ipc_kmsg_queue_first(&mq->imq_messages);
+		snprintf(line, sizeof(line), "имя %#x ip=%p msgcount=%u qlimit=%u очередь=%s knote=%s в наборе=%d препост=%#llx id=%d",
 			MACH_PORT_MAKE(i, IE_BITS_GEN(e->ie_bits)), port, mq->imq_msgcount, mq->imq_qlimit,
-			ipc_kmsg_queue_empty(&mq->imq_messages) ? "пуста" : "есть", SLIST_EMPTY(&mq->imq_klist) ? "нет" : "есть");
+			ipc_kmsg_queue_empty(&mq->imq_messages) ? "пуста" : "есть", SLIST_EMPTY(&mq->imq_klist) ? "нет" : "есть",
+			(int)port->ip_in_pset, (unsigned long long)mq->imq_preposts,
+			first && first->ikm_header ? first->ikm_header->msgh_id : -1);
 		out(ctx, line);
 	}
 };
