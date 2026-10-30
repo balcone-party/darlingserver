@@ -556,6 +556,11 @@ void (thread_reference)(thread_t thread) {
 };
 
 void thread_deallocate(thread_t xthread) {
+	// as in XNU: MIG stubs release converted thread ports unconditionally, and a null thread is
+	// valid for some routines (e.g. mach_eventlink_associate with MELA_OPTION_ASSOCIATE_ON_WAIT)
+	if (xthread == THREAD_NULL) {
+		return;
+	}
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 	if (os_ref_release(&xthread->ref_count) > 0) {
 		return;
