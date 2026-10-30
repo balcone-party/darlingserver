@@ -573,6 +573,47 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 	return canSendMore;
 };
 
+void DarlingServer::MessageQueue::sendOrPush(int socket, Message&& message) {
+	std::unique_lock lock(_lock);
+	if (_messages.empty()) {
+		struct msghdr hdr = message.rawHeader();
+		auto address = reinterpret_cast<sockaddr_un*>(hdr.msg_name);
+		bool isAddressEmpty = true;
+		for (size_t j = 0; j < sizeof(address->sun_path); ++j) {
+			if (address->sun_path[j] != '\0') {
+				isAddressEmpty = false;
+				break;
+			}
+		}
+		if (isAddressEmpty) {
+			hdr.msg_name = nullptr;
+			hdr.msg_namelen = 0;
+		}
+		ssize_t ret;
+		do {
+			ret = sendmsg(socket, &hdr, MSG_DONTWAIT | MSG_NOSIGNAL);
+		} while (ret < 0 && errno == EINTR);
+		if (ret >= 0 || errno == EPIPE || errno == ECONNREFUSED || errno == ECONNRESET || errno == ENOTCONN) {
+			// отправлено (или получатель умер — как в sendMany, сообщение отбрасываем)
+			auto cb = ret >= 0 ? message.sendNotificationCallback() : nullptr;
+			lock.unlock();
+			if (cb) {
+				cb();
+			}
+			return;
+		}
+		if (errno != EAGAIN) {
+			throw std::system_error(errno, std::generic_category(), "Failed to send message through socket");
+		}
+	}
+	_messages.push_back(std::move(message));
+	auto callback = _messageArrivalNotificationCallback;
+	lock.unlock();
+	if (callback) {
+		callback();
+	}
+};
+
 bool DarlingServer::MessageQueue::receiveMany(int socket) {
 	bool canReadMore = true;
 	std::unique_lock lock(_lock);
