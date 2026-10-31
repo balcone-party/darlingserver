@@ -582,12 +582,49 @@ void task_name_deallocate(task_name_t task_name) {
 	dtape_stub_unsafe();
 };
 
+// Policies are not tracked (task_policy_set is a no-op), so every flavor reports the defaults, as
+// xnu osfmk/kern/task_policy.c task_policy_get does with get_default set.
 kern_return_t task_policy_get(task_t task, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t* count, boolean_t* get_default) {
-	dtape_stub_unsafe();
+	if (task == TASK_NULL || task == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	switch (flavor) {
+		case TASK_CATEGORY_POLICY: {
+			if (*count < TASK_CATEGORY_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			((task_category_policy_t)policy_info)->role = TASK_UNSPECIFIED;
+			*count = TASK_CATEGORY_POLICY_COUNT;
+			break;
+		}
+		case TASK_BASE_QOS_POLICY:
+		case TASK_OVERRIDE_QOS_POLICY: {
+			if (*count < TASK_QOS_POLICY_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			task_qos_policy_t info = (task_qos_policy_t)policy_info;
+			info->task_latency_qos_tier = LATENCY_QOS_TIER_UNSPECIFIED;
+			info->task_throughput_qos_tier = THROUGHPUT_QOS_TIER_UNSPECIFIED;
+			*count = TASK_QOS_POLICY_COUNT;
+			break;
+		}
+		case TASK_POLICY_STATE: {
+			if (*count < TASK_POLICY_STATE_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			memset(policy_info, 0, sizeof(struct task_policy_state));
+			*count = TASK_POLICY_STATE_COUNT;
+			break;
+		}
+		default:
+			return KERN_INVALID_ARGUMENT;
+	}
+	*get_default = TRUE;
+	return KERN_SUCCESS;
 };
 
 void task_policy_get_deallocate(task_policy_get_t task_policy_get) {
-	dtape_stub_unsafe();
+	return task_deallocate((task_t)task_policy_get);
 };
 
 kern_return_t task_policy_set(task_t task, task_policy_flavor_t flavor, task_policy_t policy_info, mach_msg_type_number_t count) {
