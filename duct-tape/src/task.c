@@ -505,13 +505,13 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 			info->resident_size_peak = meminfo.resident_size;
 			info->virtual_size = meminfo.virtual_size;
 
-			// TODO: fill in other stuff
-
 			*task_info_count = TASK_VM_INFO_REV0_COUNT;
 
 			if (orig_info_count >= TASK_VM_INFO_REV1_COUNT) {
 
 				*task_info_count = TASK_VM_INFO_REV1_COUNT;
+				// no ledgers: resident memory stands in for the footprint
+				info->phys_footprint = meminfo.resident_size;
 
 				if (orig_info_count >= TASK_VM_INFO_REV2_COUNT) {
 
@@ -520,10 +520,17 @@ kern_return_t task_info(task_t xtask, task_flavor_t flavor, task_info_t task_inf
 					if (orig_info_count >= TASK_VM_INFO_REV3_COUNT) {
 
 						*task_info_count = TASK_VM_INFO_REV3_COUNT;
+						info->ledger_phys_footprint_peak = meminfo.resident_size;
 
 						if (orig_info_count >= TASK_VM_INFO_REV4_COUNT) {
 
 							*task_info_count = TASK_VM_INFO_REV4_COUNT;
+							// os_proc_available_memory() returns this; 0 tells an app it has no memory
+							// left (Instagram then reran its memory-pressure work in a tight loop on
+							// workqueue threads). There is no jetsam: report room under a fixed
+							// per-process limit like an app's on a 4 GB device (value not verified).
+							const uint64_t limit = 2048ull << 20;
+							info->limit_bytes_remaining = meminfo.resident_size < limit ? limit - meminfo.resident_size : 0;
 
 							if (orig_info_count >= TASK_VM_INFO_REV5_COUNT) {
 								*task_info_count = TASK_VM_INFO_REV5_COUNT;
