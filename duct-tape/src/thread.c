@@ -464,6 +464,12 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 	//         2. we can register the signalfd only when we receive a signal, since we only need to check for pending signals during sigprocess,
 	//            but this means signal processing incurs an additional delay.
 
+	// The loop borrows wait_result to learn about an interrupt (sigexc_enter only interrupts a
+	// THREAD_WAITING thread). It is not a wait of its own: the thread may carry the result of the call
+	// it was suspended in (a handed-off Mach message, a raised semaphore) that the call still has to
+	// consume once resumed, so the result is restored on the way out.
+	wait_result_t saved_wait_result = thread->xnu_thread.wait_result;
+
 	while (thread->xnu_thread.suspend_count > 0) {
 		dtape_log_debug("sigexc: going to sleep");
 
@@ -489,6 +495,10 @@ void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread) {
 			break;
 		}
 	}
+
+	thread_lock(&thread->xnu_thread);
+	thread->xnu_thread.wait_result = saved_wait_result;
+	thread_unlock(&thread->xnu_thread);
 };
 
 void dtape_thread_retain(dtape_thread_t* thread) {
@@ -588,6 +598,11 @@ static void thread_continuation_callback(void* context) {
 	wait_result = thread->xnu_thread.wait_result;
 	thread_unlock(&thread->xnu_thread);
 
+	if (wait_result == THREAD_WAITING) {
+		// a spurious resume (see thread_block_parameter): still waiting, block again
+		thread_block_parameter(continuation, parameter);
+	}
+
 	continuation(parameter, wait_result);
 
 	thread_terminate_self();
@@ -605,13 +620,22 @@ wait_result_t thread_block_parameter(thread_continue_t continuation, void* param
 
 	thread_unlock(&thread->xnu_thread);
 
-	if (waiting) {
-		dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, NULL);
-	}
+	// A resume can arrive for a wait that has already ended (two wakers, or one consumed by the
+	// interrupt path); the microthread keeps it pending and its next wait returns at once with
+	// THREAD_WAITING. As in XNU a thread runs again only once its wait has a result: block again.
+	wait_result_t wait_result;
+	for (;;) {
+		if (waiting) {
+			dtape_hooks->thread_suspend(thread->context, continuation ? thread_continuation_callback : NULL, thread, NULL);
+		}
 
-	thread_lock(&thread->xnu_thread);
-	wait_result_t wait_result = thread->xnu_thread.wait_result;
-	thread_unlock(&thread->xnu_thread);
+		thread_lock(&thread->xnu_thread);
+		wait_result = thread->xnu_thread.wait_result;
+		thread_unlock(&thread->xnu_thread);
+		if (!waiting || wait_result != THREAD_WAITING) {
+			break;
+		}
+	}
 
 	if (continuation) {
 		// TODO: we should add a thread hook to jump to a continuation without suspending
