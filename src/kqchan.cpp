@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cstdio>
 #include <darlingserver/calltrace.hpp>
 #include <darlingserver/kqchan.hpp>
 #include <darlingserver/server.hpp>
@@ -306,8 +308,15 @@ void DarlingServer::Kqchan::MachPort::_processMessages() {
 				_read(read->default_buffer, read->default_buffer_size, read->header.tid);
 			} break;
 
-			default:
-				throw std::invalid_argument("Unknown/invalid kqchan msgnum");
+			default: {
+				// a message of another kqchan kind (or garbage) on this socket: log it and drop it
+				auto *b = reinterpret_cast<const uint8_t*>(msg->data().data());
+				char hex[3 * 32 + 1] = {0};
+				for (size_t i = 0; i < std::min<size_t>(32, msg->data().size()); i++)
+					snprintf(hex + 3 * i, 4, "%02x ", b[i]);
+				kqchanLog.error() << *this << ": unknown kqchan msgnum " << callhdr->number << " on a Mach port kqchan, size "
+					<< msg->data().size() << ": " << hex << kqchanLog.endLog;
+			} break;
 		}
 	}
 };
@@ -522,8 +531,15 @@ void DarlingServer::Kqchan::Process::_processMessages() {
 				_read();
 			} break;
 
-			default:
-				throw std::invalid_argument("Unknown/invalid kqchan msgnum");
+			default: {
+				// a message of another kqchan kind (or garbage) on this socket: log it and drop it
+				auto *b = reinterpret_cast<const uint8_t*>(msg->data().data());
+				char hex[3 * 32 + 1] = {0};
+				for (size_t i = 0; i < std::min<size_t>(32, msg->data().size()); i++)
+					snprintf(hex + 3 * i, 4, "%02x ", b[i]);
+				kqchanLog.error() << *this << ": unknown kqchan msgnum " << callhdr->number << " on a process kqchan, size "
+					<< msg->data().size() << ": " << hex << kqchanLog.endLog;
+			} break;
 		}
 	}
 };

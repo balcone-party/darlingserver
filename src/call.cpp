@@ -156,9 +156,13 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			std::unique_lock lock(thread->_rwlock);
 
 			if (thread->_s2cReply) {
-				throw std::runtime_error("Received S2C reply but thread already had one pending");
+				callLog.error() << "Received S2C reply but thread already had one pending; dropping it" << callLog.endLog;
+				return nullptr;
 			}
-
+			// the reply of an interrupted call is kept as stale: the next waiter drops it
+			thread->_s2cReplyStale = thread->_s2cStaleReplies > 0;
+			if (thread->_s2cReplyStale)
+				--thread->_s2cStaleReplies;
 			thread->_s2cReply = std::move(requestMessage);
 		}
 

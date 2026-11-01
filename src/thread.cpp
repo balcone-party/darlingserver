@@ -1179,7 +1179,12 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 
 	// now let's wait for the reply
 	if (!dtape_semaphore_down_simple(_s2cReplySempahore)) {
-		// got interrupted while waiting
+		// got interrupted while waiting; the call is out, so its reply will still come (or has come
+		// and raised the semaphore): either way one reply ahead of the next call's is stale
+		{
+			std::unique_lock lock(_rwlock);
+			++_s2cStaleReplies;
+		}
 		dtape_semaphore_up(_s2cPerformSempahore);
 		return std::nullopt;
 	}
@@ -1190,6 +1195,20 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 	{
 		std::unique_lock lock(_rwlock);
 
+		if (_s2cReply && _s2cReplyStale) {
+			// the reply of an interrupted call arrived before it gave up: drop it, wait for ours
+			_s2cReply = std::nullopt;
+			_s2cReplyStale = false;
+			lock.unlock();
+			if (!dtape_semaphore_down_simple(_s2cReplySempahore)) {
+				std::unique_lock relock(_rwlock);
+				++_s2cStaleReplies;
+				relock.unlock();
+				dtape_semaphore_up(_s2cPerformSempahore);
+				return std::nullopt;
+			}
+			lock.lock();
+		}
 		if (!_s2cReply) {
 			// impossible, but just in case
 			dtape_semaphore_up(_s2cPerformSempahore);
