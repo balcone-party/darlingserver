@@ -6,11 +6,13 @@
 
 #include <kern/debug.h>
 #include <stdlib.h>
+#include <string.h>
 #include <ipc/ipc_mqueue.h>
 #include <kern/thread.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_port.h>
+#include <ipc/ipc_pset.h>
 
 extern int filt_machportattach(struct knote *kn, struct kevent_qos_s *kev);
 extern void filt_machportdetach(struct knote *kn);
@@ -468,6 +470,18 @@ void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const 
 				p->ip_messages.imq_msgcount, p->ip_messages.imq_qlimit);
 			out(ctx, line);
 		}
+		if (e->ie_object && (IE_BITS_TYPE(e->ie_bits) & MACH_PORT_TYPE_PORT_SET)) {
+			// a port set: its waitq is what a receiving thread shows as waitq=; set id and prepost
+			// list head tell whether a member's message was announced to it
+			ipc_pset_t ps = ips_object_to_pset(e->ie_object);
+			char line[200];
+			snprintf(line, sizeof(line), "set %#x waitq=%p wqset_id=%#llx prepost=%#llx",
+				MACH_PORT_MAKE(i, IE_BITS_GEN(e->ie_bits)), (void *)&ps->ips_messages.imq_set_queue.wqset_q,
+				(unsigned long long)ps->ips_messages.imq_set_queue.wqset_id,
+				(unsigned long long)ps->ips_messages.imq_set_queue.wqset_prepost_id);
+			out(ctx, line);
+			continue;
+		}
 		if (!e->ie_object || !(IE_BITS_TYPE(e->ie_bits) & (MACH_PORT_TYPE_RECEIVE | MACH_PORT_TYPE_SEND))) {
 			continue;
 		}
@@ -495,6 +509,10 @@ void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const 
 			MACH_PORT_MAKE(i, IE_BITS_GEN(e->ie_bits)), port, mq->imq_msgcount, mq->imq_qlimit,
 			ipc_kmsg_queue_empty(&mq->imq_messages) ? "пуста" : "есть", SLIST_EMPTY(&mq->imq_klist) ? "нет" : "есть",
 			h ? h->msgh_id : 0, h ? h->msgh_size : 0, h ? h->msgh_bits : 0);
+		size_t ln = strlen(line);
+		snprintf(line + ln, sizeof(line) - ln, " in_set=%#llx prepost=%#llx",
+			(unsigned long long)port->ip_messages.imq_wait_queue.waitq_set_id,
+			(unsigned long long)port->ip_messages.imq_wait_queue.waitq_prepost_id);
 		out(ctx, line);
 		// полный режим: все сообщения очереди — reply-порт и порты из дескрипторов (адреса), чтобы
 		// найти права, «застрявшие в пути» внутри непрочитанных сообщений
