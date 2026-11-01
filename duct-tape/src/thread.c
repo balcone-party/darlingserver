@@ -501,9 +501,15 @@ void dtape_thread_release(dtape_thread_t* thread) {
 
 void dtape_thread_sigexc_enter(dtape_thread_t* thread) {
 	thread_lock(&thread->xnu_thread);
-	thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
-	thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
-	clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
+	// Interrupt only a wait still in progress. A thread already woken (thread_unblock: e.g. a Mach
+	// message handed straight to the waiting receiver) keeps its result: overwriting it with
+	// THREAD_INTERRUPTED made the receive return MACH_RCV_INTERRUPTED and drop the handed-off message,
+	// so a client whose thread got suspended (libpas scavenger) as its reply arrived waited forever.
+	if (thread->xnu_thread.wait_result == THREAD_WAITING) {
+		thread->xnu_thread.state &= ~(TH_UNINT | TH_WAIT);
+		thread->xnu_thread.wait_result = THREAD_INTERRUPTED;
+		clear_wait_internal(&thread->xnu_thread, THREAD_INTERRUPTED);
+	}
 	thread_unlock(&thread->xnu_thread);
 };
 
