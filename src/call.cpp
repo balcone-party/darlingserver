@@ -155,14 +155,14 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 		{
 			std::unique_lock lock(thread->_rwlock);
 
-			if (thread->_s2cReply) {
-				callLog.error() << "Received S2C reply but thread already had one pending; dropping it" << callLog.endLog;
+			uint32_t seq = requestMessage.data().size() >= sizeof(dserver_s2c_replyhdr_t) ?
+				reinterpret_cast<const dserver_s2c_replyhdr_t*>(requestMessage.data().data())->seq : 0;
+			if (seq != thread->_s2cExpectedSeq || !seq || thread->_s2cReply) {
+				// the reply of a call whose waiter gave up (interrupted)
+				callLog.warning() << *thread << ": dropping S2C reply " << seq << " (awaiting " << thread->_s2cExpectedSeq << ")" << callLog.endLog;
 				return nullptr;
 			}
-			// the reply of an interrupted call is kept as stale: the next waiter drops it
-			thread->_s2cReplyStale = thread->_s2cStaleReplies > 0;
-			if (thread->_s2cReplyStale)
-				--thread->_s2cStaleReplies;
+			thread->_s2cExpectedSeq = 0;
 			thread->_s2cReply = std::move(requestMessage);
 		}
 
@@ -196,10 +196,13 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 
 		{
 			std::unique_lock lock(thread->_rwlock);
-			if (thread->_pendingCall && thread->_pendingCall->number() == Call::Number::InterruptEnter) {
-				// this means the client got interrupted after we had already sent a reply for the interrupted call,
-				// the client saw this unexpected reply while waiting for interrupt_enter to respond and sent it back to us,
-				// and we received both calls (interrupt_enter and push_reply) at the same time
+			if ((thread->_pendingCall && thread->_pendingCall->number() == Call::Number::InterruptEnter) ||
+			    (thread->_interrupts.empty() && !thread->_pendingSavedReply)) {
+				// the client got interrupted after we had already sent a reply for the interrupted call,
+				// saw this unexpected reply while waiting for interrupt_enter to respond and sent it back to us.
+				// interrupt_enter is either received together with push_reply or still on its way (no
+				// interrupt active yet: it can arrive after push_reply); it moves the pending reply into
+				// its interrupt
 				thread->_pendingSavedReply = std::move(replyToSave);
 			} else {
 				if (thread->_interrupts.empty()) {

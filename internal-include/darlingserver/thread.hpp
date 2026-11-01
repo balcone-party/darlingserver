@@ -104,10 +104,8 @@ namespace DarlingServer {
 		dtape_semaphore_t* _s2cPerformSempahore = nullptr;
 		dtape_semaphore_t* _s2cReplySempahore = nullptr;
 		std::optional<Message> _s2cReply = std::nullopt;
-		// S2C calls whose waiter was interrupted after the call went out: the client still replies,
-		// and that reply must be dropped, not taken as the answer to the next S2C call.
-		uint32_t _s2cStaleReplies = 0;
-		bool _s2cReplyStale = false;  // _s2cReply belongs to an interrupted call
+		uint32_t _s2cSeq = 0;
+		uint32_t _s2cExpectedSeq = 0;  // the S2C call awaiting its reply; 0 if none
 		std::condition_variable_any _runningCondvar;
 		DeferralState _deferralState = DeferralState::NotDeferred;
 		uint32_t _bsdReturnValue = 0;

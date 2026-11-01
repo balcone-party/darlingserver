@@ -1163,6 +1163,11 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 		}
 
 		call.setAddress(_address);
+		_s2cReply = std::nullopt;
+		if (!++_s2cSeq)
+			++_s2cSeq;
+		_s2cExpectedSeq = _s2cSeq;
+		reinterpret_cast<dserver_s2c_callhdr_t*>(call.data().data())->seq = _s2cSeq;
 	}
 
 	// at least for now, in order to wait for the S2C reply, we need the calling thread to be a microthread,
@@ -1177,16 +1182,21 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 	// send the call
 	Server::sharedInstance().sendMessage(std::move(call));
 
-	// now let's wait for the reply
-	if (!dtape_semaphore_down_simple(_s2cReplySempahore)) {
-		// got interrupted while waiting; the call is out, so its reply will still come (or has come
-		// and raised the semaphore): either way one reply ahead of the next call's is stale
-		{
+	// now let's wait for the reply. A count without a reply is left by the reply of an earlier call
+	// that arrived just before its waiter gave up: skip it.
+	for (;;) {
+		if (!dtape_semaphore_down_simple(_s2cReplySempahore)) {
+			// got interrupted while waiting: a reply that still comes for this call is dropped
 			std::unique_lock lock(_rwlock);
-			++_s2cStaleReplies;
+			_s2cExpectedSeq = 0;
+			_s2cReply = std::nullopt;
+			lock.unlock();
+			dtape_semaphore_up(_s2cPerformSempahore);
+			return std::nullopt;
 		}
-		dtape_semaphore_up(_s2cPerformSempahore);
-		return std::nullopt;
+		std::unique_lock lock(_rwlock);
+		if (_s2cReply)
+			break;
 	}
 
 	s2cLog.debug() << *this << ": Received S2C reply" << s2cLog.endLog;
@@ -1194,26 +1204,6 @@ std::optional<DarlingServer::Message> DarlingServer::Thread::_s2cPerform(Message
 	// extract the reply
 	{
 		std::unique_lock lock(_rwlock);
-
-		if (_s2cReply && _s2cReplyStale) {
-			// the reply of an interrupted call arrived before it gave up: drop it, wait for ours
-			_s2cReply = std::nullopt;
-			_s2cReplyStale = false;
-			lock.unlock();
-			if (!dtape_semaphore_down_simple(_s2cReplySempahore)) {
-				std::unique_lock relock(_rwlock);
-				++_s2cStaleReplies;
-				relock.unlock();
-				dtape_semaphore_up(_s2cPerformSempahore);
-				return std::nullopt;
-			}
-			lock.lock();
-		}
-		if (!_s2cReply) {
-			// impossible, but just in case
-			dtape_semaphore_up(_s2cPerformSempahore);
-			throw std::runtime_error("S2C reply semaphore incremented, but no reply present");
-		}
 
 		reply = std::move(_s2cReply);
 		_s2cReply = std::nullopt;

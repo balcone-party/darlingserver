@@ -154,9 +154,12 @@ enum dserver_s2c_msgnum {
 
 typedef enum dserver_s2c_msgnum dserver_s2c_msgnum_t;
 
+// seq: the server numbers each S2C call, the client echoes it in the reply, so a late reply of
+// a call whose waiter gave up is never taken as the answer to a later call.
 typedef struct dserver_s2c_callhdr {
 	int call_number;
 	dserver_s2c_msgnum_t s2c_number;
+	uint32_t seq;
 } dserver_s2c_callhdr_t;
 
 typedef struct dserver_s2c_replyhdr {
@@ -165,6 +168,7 @@ typedef struct dserver_s2c_replyhdr {
 	int tid;
 	int architecture;
 	dserver_s2c_msgnum_t s2c_number;
+	uint32_t seq;
 } dserver_s2c_replyhdr_t;
 
 typedef struct dserver_s2c_call_mmap {
