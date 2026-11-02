@@ -1457,6 +1457,23 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 			return KERN_SUCCESS;
 		};
 
+		// osfmk/kern/thread.c thread_info_internal: priorities of a timeshare thread; ours are not
+		// tracked, so the defaults of a user thread (BASEPRI_DEFAULT, MAXPRI_USER), never depressed
+		case THREAD_SCHED_TIMESHARE_INFO: {
+			if (*thread_info_count < POLICY_TIMESHARE_INFO_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+			*thread_info_count = POLICY_TIMESHARE_INFO_COUNT;
+
+			policy_timeshare_info_t ts_info = (policy_timeshare_info_t)thread_info_out;
+			ts_info->depressed = FALSE;
+			ts_info->base_priority = BASEPRI_DEFAULT;
+			ts_info->depress_priority = -1;
+			ts_info->cur_priority = BASEPRI_DEFAULT;
+			ts_info->max_priority = MAXPRI_USER;
+			return KERN_SUCCESS;
+		};
+
 		case THREAD_BASIC_INFO: {
 			if (*thread_info_count < THREAD_BASIC_INFO_COUNT) {
 				return KERN_INVALID_ARGUMENT;
@@ -1471,7 +1488,9 @@ kern_return_t thread_info(thread_t xthread, thread_flavor_t flavor, thread_info_
 			// TODO: fill in these values properly
 			info->cpu_usage = 0;
 			info->flags = 0;
-			info->policy = 0;
+			// every thread is timeshare here (osfmk/kern/thread.c: TIMESHARE or RR by sched_mode);
+			// clients reject 0 (VideoToolbox's H.264 decoder fails to create its worker threads)
+			info->policy = POLICY_TIMESHARE;
 			info->sleep_time = 0;
 			info->system_time.seconds = 0;
 			info->system_time.microseconds = 0;
