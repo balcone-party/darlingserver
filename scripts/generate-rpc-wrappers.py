@@ -260,20 +260,54 @@ calls = [
 	# kqueue channels
 	#
 
+	('kqchan_channel', [], [
+		('socket', '@fd'),
+	]),
+
 	('kqchan_mach_port_open', [
 		('port_name', 'uint32_t'),
 		('receive_buffer', 'void*', 'uint64_t'),
 		('receive_buffer_size', 'uint64_t'),
 		('saved_filter_flags', 'uint64_t'),
 	], [
-		('socket', '@fd'),
+		('id', 'uint64_t'),
 	]),
 
 	('kqchan_proc_open', [
 		('pid', 'int32_t'),
 		('flags', 'uint32_t'),
 	], [
-		('socket', '@fd'),
+		('id', 'uint64_t'),
+	]),
+
+	('kqchan_close', [
+		('id', 'uint64_t'),
+	], []),
+
+	('kqchan_mach_port_modify', [
+		('id', 'uint64_t'),
+		('receive_buffer', 'uint64_t'),
+		('receive_buffer_size', 'uint64_t'),
+		('saved_filter_flags', 'uint64_t'),
+	], []),
+
+	('kqchan_mach_port_read', [
+		('id', 'uint64_t'),
+		('default_buffer', 'uint64_t'),
+		('default_buffer_size', 'uint64_t'),
+	], [
+		('fflags', 'uint32_t'),
+		('xflags', 'uint32_t'),
+		('data', 'int64_t'),
+		('ext0', 'uint64_t'),
+		('ext1', 'uint64_t'),
+	]),
+
+	('kqchan_proc_read', [
+		('id', 'uint64_t'),
+	], [
+		('fflags', 'uint32_t'),
+		('data', 'int64_t'),
 	]),
 
 	#

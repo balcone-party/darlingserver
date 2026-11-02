@@ -707,24 +707,17 @@ void DarlingServer::Call::PthreadMarkcancel::processCall() {
 	_sendReply(code);
 };
 
-void DarlingServer::Call::KqchanMachPortOpen::processCall() {
+void DarlingServer::Call::KqchanChannel::processCall() {
 	int code = 0;
 	int socket = -1;
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
-			auto kqchan = std::make_shared<Kqchan::MachPort>(process, _body.port_name, _body.receive_buffer, _body.receive_buffer_size, _body.saved_filter_flags);
-
 			try {
-				socket = kqchan->setup();
+				socket = process->openKqchanChannel();
 			} catch (std::system_error e) {
 				code = -e.code().value();
-			} catch (...) {
-				// just report that we couldn't find the port
-				code = -ESRCH;
 			}
-
-			process->registerKqchan(kqchan);
 		} else {
 			code = -ESRCH;
 		}
@@ -735,24 +728,22 @@ void DarlingServer::Call::KqchanMachPortOpen::processCall() {
 	_sendReply(code, socket);
 };
 
-void DarlingServer::Call::KqchanProcOpen::processCall() {
+void DarlingServer::Call::KqchanMachPortOpen::processCall() {
 	int code = 0;
-	int socket = -1;
+	uint64_t id = 0;
 
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
-			auto kqchan = std::make_shared<Kqchan::Process>(process, _body.pid, _body.flags);
-
+			auto kqchan = std::make_shared<Kqchan::MachPort>(process, _body.port_name, _body.receive_buffer, _body.receive_buffer_size, _body.saved_filter_flags);
 			try {
-				socket = kqchan->setup();
+				// registered first: an event already queued is notified from setup
+				process->registerKqchan(kqchan);
+				kqchan->setup();
+				id = kqchan->id();
 			} catch (std::system_error e) {
+				process->unregisterKqchan(kqchan->id());
 				code = -e.code().value();
-			} catch (...) {
-				// just report that we couldn't find the process
-				code = -ESRCH;
 			}
-
-			process->registerKqchan(kqchan);
 		} else {
 			code = -ESRCH;
 		}
@@ -760,7 +751,89 @@ void DarlingServer::Call::KqchanProcOpen::processCall() {
 		code = -ESRCH;
 	}
 
-	_sendReply(code, socket);
+	_sendReply(code, id);
+};
+
+void DarlingServer::Call::KqchanProcOpen::processCall() {
+	int code = 0;
+	uint64_t id = 0;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			auto kqchan = std::make_shared<Kqchan::Process>(process, _body.pid, _body.flags);
+			try {
+				process->registerKqchan(kqchan);
+				kqchan->setup();
+				id = kqchan->id();
+			} catch (std::system_error e) {
+				process->unregisterKqchan(kqchan->id());
+				code = -e.code().value();
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, id);
+};
+
+void DarlingServer::Call::KqchanClose::processCall() {
+	int code = -ESRCH;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			process->unregisterKqchan(_body.id);
+			code = 0;
+		}
+	}
+
+	_sendReply(code);
+};
+
+template<class T>
+static std::shared_ptr<T> kqchanOf(std::weak_ptr<DarlingServer::Thread> weakThread, uint64_t id) {
+	if (auto thread = weakThread.lock()) {
+		if (auto process = thread->process()) {
+			return std::dynamic_pointer_cast<T>(process->lookupKqchan(id));
+		}
+	}
+	return nullptr;
+}
+
+void DarlingServer::Call::KqchanMachPortModify::processCall() {
+	int code = -ENOENT;
+
+	if (auto kqchan = kqchanOf<Kqchan::MachPort>(_thread, _body.id)) {
+		kqchan->modify(_body.receive_buffer, _body.receive_buffer_size, _body.saved_filter_flags);
+		code = 0;
+	}
+
+	_sendReply(code);
+};
+
+void DarlingServer::Call::KqchanMachPortRead::processCall() {
+	int code = -ENOENT;
+	dserver_kqchan_reply_mach_port_read_t reply = {};
+
+	if (auto kqchan = kqchanOf<Kqchan::MachPort>(_thread, _body.id)) {
+		code = kqchan->read(_body.default_buffer, _body.default_buffer_size, &reply) ? 0 : -EAGAIN;
+	}
+
+	_sendReply(code, reply.kev.fflags, reply.kev.xflags, reply.kev.data, reply.kev.ext[0], reply.kev.ext[1]);
+};
+
+void DarlingServer::Call::KqchanProcRead::processCall() {
+	int code = -ENOENT;
+	uint32_t fflags = 0;
+	int64_t data = 0;
+
+	if (auto kqchan = kqchanOf<Kqchan::Process>(_thread, _body.id)) {
+		code = kqchan->read(&fflags, &data) ? 0 : -EAGAIN;
+	}
+
+	_sendReply(code, fflags, data);
 };
 
 void DarlingServer::Call::ForkWaitForChild::processCall() {

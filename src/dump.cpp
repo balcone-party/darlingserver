@@ -71,10 +71,9 @@ void DarlingServer::dumpKqchans(int fd) {
 			if (mp->_dtapeKqchan) {
 				dtape_kqchan_mach_port_describe(mp->_dtapeKqchan, buf, sizeof(buf));
 			}
-			dprintf(fd, "kqchan %llu process %d (ns %d) port %#x canSend=%d canSendNotification=%d defer=%d deferred=%d notifications=%llu %s\n",
-				(unsigned long long)mp->_debugID, process->id(), process->nsid(), mp->_port, mp->_canSend,
-				mp->_canSendNotification, mp->_deferNotification, mp->_deferredNotification.has_value(),
-				(unsigned long long)mp->_notificationCount, buf);
+			dprintf(fd, "kqchan %llu process %d (ns %d) port %#x id %#llx canSendNotification=%d notifications=%llu %s\n",
+				(unsigned long long)mp->_debugID, process->id(), process->nsid(), mp->_port, (unsigned long long)mp->id(),
+				mp->_canSendNotification, (unsigned long long)mp->_notificationCount, buf);
 		}
 	}
 };

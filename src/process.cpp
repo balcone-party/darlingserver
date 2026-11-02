@@ -29,6 +29,9 @@
 #include <regex>
 
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <cstring>
+#include <darlingserver/server.hpp>
 
 static DarlingServer::Log processLog("process");
 
@@ -474,10 +477,103 @@ void DarlingServer::Process::registerKqchan(std::shared_ptr<Kqchan> kqchan) {
 	_kqchannels[kqchan->_idForProcess()] = kqchan;
 };
 
-void DarlingServer::Process::unregisterKqchan(std::shared_ptr<Kqchan> kqchan) {
+void DarlingServer::Process::unregisterKqchan(uint64_t id) {
+	std::shared_ptr<Kqchan> kqchan;  // destroyed outside the lock (see notifyDead)
 	std::unique_lock lock(_rwlock);
+	auto it = _kqchannels.find(id);
+	if (it != _kqchannels.end()) {
+		kqchan = std::move(it->second);
+		_kqchannels.erase(it);
+	}
+};
 
-	_kqchannels.erase(kqchan->_idForProcess());
+std::shared_ptr<DarlingServer::Kqchan> DarlingServer::Process::lookupKqchan(uint64_t id) const {
+	std::shared_lock lock(_rwlock);
+	auto it = _kqchannels.find(id);
+	return it == _kqchannels.end() ? nullptr : it->second;
+};
+
+int DarlingServer::Process::openKqchanChannel() {
+	int fds[2];
+	if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds) < 0) {
+		throw std::system_error(errno, std::generic_category());
+	}
+	auto socket = std::make_shared<FD>(fds[0]);
+	if (fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL) | O_NONBLOCK) < 0) {
+		int err = errno;
+		close(fds[1]);
+		throw std::system_error(err, std::generic_category());
+	}
+
+	std::weak_ptr<Process> weakThis = shared_from_this();
+	_kqchanOutbox.setMessageArrivalNotificationCallback([weakThis]() {
+		if (auto self = weakThis.lock()) {
+			self->_kqchanFlush();
+		}
+	});
+	auto monitor = std::make_shared<Monitor>(socket, Monitor::Event::Writable | Monitor::Event::HangUp, true, false, [weakThis, socket](std::shared_ptr<Monitor> monitor, Monitor::Event event) {
+		auto self = weakThis.lock();
+		if (!self || static_cast<uint64_t>(event & Monitor::Event::HangUp) != 0) {
+			// the client closed the channel (exec, or its last kqueue user died)
+			Server::sharedInstance().removeMonitor(monitor);
+			if (self) {
+				self->_kqchanDrop(socket);
+			}
+			return;
+		}
+		self->_kqchanFlush();
+	});
+
+	std::shared_ptr<FD> old;
+	{
+		std::unique_lock lock(_kqchanSendMutex);
+		old = _kqchanSocket;
+	}
+	if (old) {
+		_kqchanDrop(old);
+	}
+	{
+		std::unique_lock lock(_kqchanSendMutex);
+		_kqchanSocket = socket;
+		_kqchanMonitor = monitor;
+	}
+	Server::sharedInstance().addMonitor(monitor);
+	return fds[1];
+};
+
+// Drop the channel and every kqchan of the process, if socket is still the current channel.
+void DarlingServer::Process::_kqchanDrop(std::shared_ptr<FD> socket) {
+	std::shared_ptr<Monitor> monitor;
+	{
+		std::unique_lock lock(_kqchanSendMutex);
+		if (_kqchanSocket != socket) {
+			return;
+		}
+		monitor = std::move(_kqchanMonitor);
+		_kqchanSocket = nullptr;
+	}
+	if (monitor) {
+		Server::sharedInstance().removeMonitor(monitor);
+	}
+	decltype(_kqchannels) kqchannels;
+	{
+		std::unique_lock lock(_rwlock);
+		kqchannels.swap(_kqchannels);
+	}
+};
+
+void DarlingServer::Process::kqchanNotify(uint64_t id) {
+	Message msg(sizeof(id), 0);
+	memcpy(msg.data().data(), &id, sizeof(id));
+	_kqchanOutbox.push(std::move(msg));
+};
+
+void DarlingServer::Process::_kqchanFlush() {
+	std::unique_lock lock(_kqchanSendMutex);
+	if (!_kqchanSocket) {
+		return;
+	}
+	while (!_kqchanOutbox.empty() && _kqchanOutbox.sendMany(_kqchanSocket->fd()));
 };
 
 void DarlingServer::Process::waitForChildAfterFork() {
@@ -801,6 +897,16 @@ void DarlingServer::Process::notifyDead() {
 		kqchannels.swap(_kqchannels);
 	}
 	kqchannels.clear();
+	{
+		std::shared_ptr<FD> socket;
+		{
+			std::unique_lock lock(_kqchanSendMutex);
+			socket = _kqchanSocket;
+		}
+		if (socket) {
+			_kqchanDrop(socket);
+		}
+	}
 
 	// keep ourselves alive until the duct-taped context is done
 	_selfReference = shared_from_this();

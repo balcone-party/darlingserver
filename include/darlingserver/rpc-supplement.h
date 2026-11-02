@@ -19,20 +19,14 @@ extern "C" {
  * that occur on the server side (in darlingserver). This is necessary
  * for filters like EVFILT_MACHPORT and EVFILT_PROC.
  *
- * The general process works like this:
- *   1. libkqueue is told to add a knote for one of the special filters that requires a kqchan.
- *   2. libkqueue hands that off to our filter handler code for that filter.
- *   3. our filter handler opens a kqchan using a darlingserver RPC call.
- *   4. darlingserver sets up the kqchan on the server side and sends back a socket
- *      that the client can monitor and send channel messages to.
- *   5. when the client needs to modify some of the server state for the channel,
- *      it sends a special message (specialized depending on the channel type).
- *   6. when the server receives an event of interest, it notifies the client
- *      by sending a generic notification message (to which the client should NOT reply).
- *   7. when the client receives a notification, libkqueue will attempt to read the message
- *      by calling the copyout method on the filter. for kqchan-based filters, this means
- *      sending a special message (specialized depending on the channel type) to which the
- *      server replies with the necessary event information.
+ * The general process works like this (iosc: one channel per process instead of a socket per kqchan):
+ *   1. the client opens the process's channel once (kqchan_channel RPC, a SOCK_SEQPACKET socket).
+ *   2. a knote for EVFILT_MACHPORT or EVFILT_PROC opens a kqchan with an RPC that returns its id.
+ *   3. when a kqchan has an event, the server writes its 8-byte id to the channel, at most once
+ *      until the client reads it.
+ *   4. the client reads the event with an RPC (kqchan_mach_port_read / kqchan_proc_read), which
+ *      also acknowledges the notification; modify and close are RPCs too.
+ *   5. closing the channel (exec in the same process) drops all of the process's kqchans.
  */
 
 enum dserver_kqchan_msgnum {

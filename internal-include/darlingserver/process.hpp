@@ -108,6 +108,13 @@ namespace DarlingServer {
 		friend void dumpThreads(int fd);  // iosc: src/dump.cpp
 		friend void dumpKqchans(int fd);
 		std::unordered_map<uintptr_t, std::weak_ptr<Kqchan::Process>> _listeningKqchannels;
+		// one channel per process carries kqchan notifications (the 8-byte kqchan id) to the client
+		std::mutex _kqchanSendMutex;
+		std::shared_ptr<FD> _kqchanSocket;
+		std::shared_ptr<Monitor> _kqchanMonitor;
+		MessageQueue _kqchanOutbox;
+		void _kqchanFlush();
+		void _kqchanDrop(std::shared_ptr<FD> socket);
 		dtape_semaphore_t* _dtapeForkWaitSemaphore;
 		Architecture _architecture;
 		std::weak_ptr<Process> _tracerProcess;
@@ -185,7 +192,11 @@ namespace DarlingServer {
 		void setPendingReplacement();
 
 		void registerKqchan(std::shared_ptr<Kqchan> kqchan);
-		void unregisterKqchan(std::shared_ptr<Kqchan> kqchan);
+		void unregisterKqchan(uint64_t id);
+		std::shared_ptr<Kqchan> lookupKqchan(uint64_t id) const;
+		// a new channel replaces the old one and drops its kqchans (exec in the same process)
+		int openKqchanChannel();
+		void kqchanNotify(uint64_t id);
 
 		void registerListeningKqchan(std::shared_ptr<Kqchan::Process> kqchan);
 		void unregisterListeningKqchan(uintptr_t kqchanID);
