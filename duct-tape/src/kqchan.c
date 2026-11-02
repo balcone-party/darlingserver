@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ipc/ipc_mqueue.h>
+#include <ipc/ipc_kmsg.h>
 #include <kern/thread.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
@@ -112,15 +113,39 @@ static void kqchan_invoke_callback(dtape_kqchan_mach_port_t* kqchan) {
 	libsimple_lock_unlock(&kqchan->callback_lock);
 };
 
+// Whether the message at the head of the queue can be received without any client memory mapping:
+// only port descriptors (inserted into the port space here) or no descriptors at all.
+static bool kqchan_head_is_inline(ipc_mqueue_t mqueue) {
+	ipc_kmsg_t kmsg = IKM_NULL;
+	if (imq_is_set(mqueue))
+		return false;
+	if (!ipc_mqueue_peek(mqueue, NULL, NULL, NULL, NULL, &kmsg) || kmsg == IKM_NULL)
+		return false;
+	mach_msg_header_t* hdr = kmsg->ikm_header;
+	if (!(hdr->msgh_bits & MACH_MSGH_BITS_COMPLEX))
+		return true;
+	mach_msg_body_t* body = (mach_msg_body_t*)(hdr + 1);
+	mach_msg_descriptor_t* desc = (mach_msg_descriptor_t*)(body + 1);
+	for (mach_msg_size_t i = 0; i < body->msgh_descriptor_count; i++) {
+		mach_msg_descriptor_type_t type = desc[i].type.type;
+		if (type != MACH_MSG_PORT_DESCRIPTOR && type != MACH_MSG_GUARDED_PORT_DESCRIPTOR)
+			return false;
+	}
+	return true;
+};
+
 bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqchan_reply_mach_port_read_t* reply, uint64_t default_buffer, uint64_t default_buffer_size) {
 	struct kevent_qos_s kev;
 	bool maybe_used_default_buffer = false;
 	thread_t xthread = current_thread();
 	dtape_thread_t* thread = dtape_thread_for_xnu_thread(xthread);
 
+	// bit 63 of the size: the data area grows down (KEVENT_FLAG_STACK_DATA, a workqueue thread's stack)
+	bool stack_data = (default_buffer_size >> 63) != 0;
+	default_buffer_size &= ~(1ull << 63);
 	thread->kevent_ctx.kec_data_out = thread->kevent_ctx.kec_data_avail = default_buffer;
 	thread->kevent_ctx.kec_data_size = thread->kevent_ctx.kec_data_resid = default_buffer_size;
-	thread->kevent_ctx.kec_process_flags = 0;
+	thread->kevent_ctx.kec_process_flags = stack_data ? KEVENT_FLAG_STACK_DATA : 0;
 
 	dtape_log_debug("trying to fill kevent for kqchan %p with mqueue %p", kqchan, kqchan->knote.kn_mqueue);
 
@@ -140,11 +165,25 @@ bool dtape_kqchan_mach_port_fill(dtape_kqchan_mach_port_t* kqchan, dserver_kqcha
 
 	dtape_log_debug("has events before process? %s", has_events ? "yes" : "no");
 
+	// MACH_RCV_MSG: the message is received here, into the knote's buffer or the data area, as
+	// filt_machportprocess does in XNU, unless it carries out-of-line memory or ports: their copyout
+	// maps memory in the client through an S2C call, and the client thread is waiting on the channel
+	// socket, not in an RPC, so the server would hang. Such messages (and anything queued on a port
+	// set, whose head cannot be peeked) are reported as ready only (kev.xflags bit 0), and the client
+	// receives them with a mach_msg RPC.
+	uint64_t sfflags = kqchan->knote.kn_sfflags;
+	bool rcv_msg = (sfflags & MACH_RCV_MSG) != 0;
+	if (rcv_msg && !kqchan_head_is_inline(kqchan->knote.kn_mqueue)) {
+		kqchan->knote.kn_sfflags &= ~(uint64_t)MACH_RCV_MSG;
+		rcv_msg = false;
+	}
 	// as in XNU knote_process(): the knote is suppressed and locked while it is processed
 	// (filt_machport_turnstile_prepare_lazily asserts it when a received message carries port rights)
 	kqchan->knote.kn_status |= KN_SUPPRESSED | KN_LOCKED;
 	bool result = (filt_machportprocess(&kqchan->knote, (void*)&reply->kev) & FILTER_ACTIVE) ? true : false;
 	kqchan->knote.kn_status &= ~(KN_SUPPRESSED | KN_LOCKED);
+	kqchan->knote.kn_sfflags = sfflags;
+	reply->kev.xflags = (sfflags & MACH_RCV_MSG) && !rcv_msg ? 1 : 0;
 
 	dtape_log_debug("had events that were processed? %s", result ? "yes" : "no");
 
