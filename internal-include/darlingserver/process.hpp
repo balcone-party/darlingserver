@@ -92,6 +92,10 @@ namespace DarlingServer {
 		// /proc/<pid>/mem, opened on first access: the ptrace access check happens once at open
 		// instead of on every process_vm_readv/writev (copyin/copyout of every message)
 		mutable std::atomic<int> _memFD{-2};
+		// shared window (shm_window): message buffers the client stages there are copied with memcpy
+		uintptr_t _shmBase = 0;
+		size_t _shmSize = 0;
+		void* _shmLocal = nullptr;
 		mutable std::shared_mutex _rwlock;
 		std::unordered_map<uint64_t, std::weak_ptr<Thread>> _threads;
 		std::string _cachedVchrootPath;
@@ -205,6 +209,8 @@ namespace DarlingServer {
 		uintptr_t mapFile(int fd, size_t pageCount, int protection, uintptr_t addressHint, size_t pageOffset, bool fixed, bool overwrite);
 		void changeProtection(uintptr_t address, size_t pageCount, int protection);
 		void syncMemory(uintptr_t address, size_t size, int sync_flags);
+		int setSharedWindow(int fd, uintptr_t base, size_t size);
+		void clearSharedWindow();
 
 		uintptr_t getNextRegion(uintptr_t address) const;
 

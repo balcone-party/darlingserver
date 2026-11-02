@@ -114,6 +114,32 @@ DarlingServer::Process::~Process() {
 	if (fd >= 0) {
 		close(fd);
 	}
+	clearSharedWindow();
+};
+
+int DarlingServer::Process::setSharedWindow(int fd, uintptr_t base, size_t size) {
+	clearSharedWindow();
+	if (size == 0 || size > (64u << 20) || (base & 0xfff) || (size & 0xfff)) {
+		return -EINVAL;
+	}
+	void* m = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (m == MAP_FAILED) {
+		return -errno;
+	}
+	std::unique_lock lock(_rwlock);
+	_shmLocal = m;
+	_shmBase = base;
+	_shmSize = size;
+	return 0;
+};
+
+void DarlingServer::Process::clearSharedWindow() {
+	std::unique_lock lock(_rwlock);
+	if (_shmLocal) {
+		munmap(_shmLocal, _shmSize);
+	}
+	_shmLocal = nullptr;
+	_shmBase = _shmSize = 0;
 };
 
 DarlingServer::Process::ID DarlingServer::Process::id() const {
@@ -226,6 +252,20 @@ bool DarlingServer::Process::_readOrWriteMemory(bool isWrite, uintptr_t remoteAd
 		return false;
 	}
 
+	// fastest path: the client staged the buffer in the shared window
+	{
+		std::shared_lock lock(_rwlock);
+		if (_shmLocal && remoteAddress >= _shmBase && length <= _shmSize && remoteAddress - _shmBase <= _shmSize - length) {
+			void* local = static_cast<char*>(_shmLocal) + (remoteAddress - _shmBase);
+			if (isWrite) {
+				memcpy(local, localBuffer, length);
+			} else {
+				memcpy(localBuffer, local, length);
+			}
+			return true;
+		}
+	}
+
 	// fast path: /proc/<pid>/mem (opened once; -1 — couldn't open, use process_vm_*)
 	int memFD = _memFD.load(std::memory_order_acquire);
 	if (memFD == -2) {
@@ -325,6 +365,13 @@ void DarlingServer::Process::notifyCheckin(Architecture architecture) {
 		// exec case
 
 		processLog.info() << *this << ": replacing process with a new task (with architecture \"" << architectureToString(architecture) << "\")" << processLog.endLog;
+
+		// the shared window was the old image's mapping
+		if (_shmLocal) {
+			munmap(_shmLocal, _shmSize);
+			_shmLocal = nullptr;
+			_shmBase = _shmSize = 0;
+		}
 
 		// clear all threads except the main thread
 		std::shared_ptr<Thread> mainThread = nullptr;

@@ -111,6 +111,14 @@ calls = [
 		('lifetime_listener_pipe', '@fd')
 	], []),
 
+	# iosc: a shared window of the client's memory (memfd it maps too), so copyin/copyout of
+	# message buffers placed there are a memcpy instead of a /proc/<pid>/mem syscall per copy
+	('shm_window', [
+		('fd', '@fd'),
+		('base', 'uint64_t'),
+		('size', 'uint64_t'),
+	], []),
+
 	('checkout', [
 		('exec_listener_pipe', '@fd'),
 		('executing_macho', 'bool'),

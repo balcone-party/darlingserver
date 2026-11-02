@@ -354,6 +354,19 @@ void DarlingServer::Call::Checkin::processCall() {
 	_sendReply(code);
 };
 
+void DarlingServer::Call::ShmWindow::processCall() {
+	int code = -ESRCH;
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			code = _body.fd >= 0 ? process->setSharedWindow(_body.fd, _body.base, _body.size) : -EBADF;
+		}
+	}
+	if (_body.fd >= 0) {
+		close(_body.fd);
+	}
+	_sendReply(code);
+};
+
 void DarlingServer::Call::Checkout::processCall() {
 	int code = 0;
 	bool threadDied = false;
