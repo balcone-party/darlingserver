@@ -42,7 +42,7 @@ namespace DarlingServer {
 	class Process;
 	class Call;
 
-	// iosc: дамп микропотоков по touch <prefix>/dump.req (src/dump.cpp)
+	// iosc: microthread dump on touch <prefix>/dump.req (src/dump.cpp)
 	void dumpThreads(int fd);
 	void dumpKqchans(int fd);
 	void startDumpWatcher(const char* prefix);
@@ -90,11 +90,11 @@ namespace DarlingServer {
 		dtape_thread_t* _dtapeThread;
 		std::function<void()> _continuationCallback = nullptr;
 		bool _running = false;
-		// iosc: resume() пришёл, пока микропоток ещё выполнялся (suspend до возврата на вершину) —
-		// перепланировать в doneWorking, иначе пробуждение терялось
+		// iosc: resume() arrived while the microthread was still running (suspended but not yet back
+		// at the top): reschedule in doneWorking, otherwise the wakeup is lost
 		bool _rescheduleWhenStopped = false;
-		// iosc: resume() до suspend() (пробуждение между assert_wait и thread_block: duct-tape
-		// thread_block отпускает блокировку потока до suspend) — следующий suspend() не засыпает
+		// iosc: resume() before suspend() (a wakeup between assert_wait and thread_block: duct-tape's
+		// thread_block drops the thread lock before suspend): the next suspend() does not sleep
 		bool _pendingResume = false;
 		bool _terminating = false;
 		std::shared_ptr<Call> _activeCall = nullptr;

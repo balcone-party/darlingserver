@@ -594,7 +594,7 @@ void DarlingServer::MessageQueue::sendOrPush(int socket, Message&& message) {
 			ret = sendmsg(socket, &hdr, MSG_DONTWAIT | MSG_NOSIGNAL);
 		} while (ret < 0 && errno == EINTR);
 		if (ret >= 0 || errno == EPIPE || errno == ECONNREFUSED || errno == ECONNRESET || errno == ENOTCONN) {
-			// отправлено (или получатель умер — как в sendMany, сообщение отбрасываем)
+			// sent (or the receiver died: as in sendMany, the message is dropped)
 			auto cb = ret >= 0 ? message.sendNotificationCallback() : nullptr;
 			lock.unlock();
 			if (cb) {

@@ -823,8 +823,8 @@ std::shared_ptr<DarlingServer::FD> DarlingServer::Monitor::fd() const {
 };
 
 void DarlingServer::Server::sendMessage(Message&& message) {
-	// C1 (часть): ответ уходит прямо из рабочего потока — без eventfd и пробуждения потока epoll.
-	// DSERVER_DIRECT_REPLY=0 — как раньше, через outbox.
+	// The reply goes straight from the worker thread, without an eventfd and an epoll thread wakeup.
+	// DSERVER_DIRECT_REPLY=0 sends it through the outbox instead.
 	static const bool direct = []() {
 		const char* env = getenv("DSERVER_DIRECT_REPLY");
 		return !(env && env[0] == '0');

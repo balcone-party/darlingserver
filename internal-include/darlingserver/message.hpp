@@ -180,7 +180,7 @@ namespace DarlingServer {
 		std::optional<Message> pop();
 
 		bool sendMany(int socket);
-		// Отправить сразу из вызывающего потока, если очередь пуста; иначе (или при EAGAIN) — в очередь.
+		// Send right from the calling thread if the queue is empty; otherwise (or on EAGAIN) queue it.
 		void sendOrPush(int socket, Message&& message);
 		bool receiveMany(int socket);
 

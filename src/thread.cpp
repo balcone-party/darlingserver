@@ -619,12 +619,12 @@ doneWorking:
 		_running = false;
 	}
 	if (!_suspended) {
-		_pendingResume = false;  // вызов завершён без ожидания — пробуждение не относится к следующему
+		_pendingResume = false;  // the call finished without waiting: the wakeup is not for the next one
 	}
 	if (_rescheduleWhenStopped) {
 		_rescheduleWhenStopped = false;
 		if (_suspended && !_terminating && !_dead) {
-			CallTrace::add('r', -1, _nstid, 0, 1);  // x=1: отложенный resume выполнен
+			CallTrace::add('r', -1, _nstid, 0, 1);  // x=1: deferred resume done
 			Server::sharedInstance().scheduleThread(shared_from_this());
 		}
 	}
@@ -681,7 +681,7 @@ void DarlingServer::Thread::suspend(std::function<void()> continuationCallback, 
 
 	_rwlock.lock();
 	if (_pendingResume) {
-		// пробуждение уже пришло (см. resume()) — не засыпаем
+		// the wakeup already came (see resume()): don't sleep
 		_pendingResume = false;
 		_rwlock.unlock();
 		CallTrace::add('r', -1, _nstid, 0, 2);
@@ -735,18 +735,18 @@ void DarlingServer::Thread::resume() {
 	{
 		std::unique_lock lock(_rwlock);
 		if (!_suspended) {
-			// iosc: поток выполняется и ещё не приостановлен — пробуждение для ожидания, которое
-			// он вот-вот начнёт (thread_block после assert_wait); запомнить для suspend()
+			// iosc: the thread runs and is not suspended yet: the wakeup is for a wait it is about
+			// to start (thread_block after assert_wait); remember it for suspend()
 			if (_running) {
 				_pendingResume = true;
 			}
 			return;
 		}
 		if (_running) {
-			// iosc: suspend() уже поставил _suspended, но микропоток ещё не вернулся на вершину.
-			// doWork() сейчас увидел бы _running и выбросил бы пробуждение (так терялись ответы
-			// на чтение kqchan: semaphore_signal вне микропотока будил исполнителя kernelAsync в
-			// этот момент) — перепланирует doneWorking, когда поток остановится.
+			// iosc: suspend() already set _suspended, but the microthread is not back at the top yet.
+			// doWork() would see _running now and drop the wakeup (kqchan read replies were lost
+			// this way: a semaphore_signal outside a microthread woke the kernelAsync executor at
+			// this moment); doneWorking reschedules once the thread stops.
 			_rescheduleWhenStopped = true;
 			return;
 		}

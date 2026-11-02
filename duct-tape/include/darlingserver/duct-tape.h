@@ -74,8 +74,8 @@ int dtape_thread_load_state_from_user(dtape_thread_t* thread, uintptr_t thread_s
 int dtape_thread_save_state_to_user(dtape_thread_t* thread, uintptr_t thread_state_address, uintptr_t float_state_address);
 void dtape_thread_process_signal(dtape_thread_t* thread, int bsd_signal_number, int linux_signal_number, int code, uintptr_t signal_address);
 void dtape_thread_wait_while_user_suspended(dtape_thread_t* thread);
-// iosc: дамп (src/dump.cpp): describe — по копии структуры (поток мог умереть), её размер — struct_size
-// valid_string: указатель на строку можно читать (name, wmesg — статические строки образа)
+// iosc: dump (src/dump.cpp): describe works on a copy of the struct (the thread may have died), sized by struct_size
+// valid_string: the string pointer is readable (name and wmesg are static strings of the image)
 void dtape_thread_describe(dtape_thread_t* thread, char* buf, size_t size, bool (*valid_string)(const char*));
 size_t dtape_thread_struct_size(void);
 void dtape_thread_retain(dtape_thread_t* thread);

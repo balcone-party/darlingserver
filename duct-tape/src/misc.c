@@ -86,9 +86,9 @@ ssize_t getrandom(void* buf, size_t buflen, unsigned int flags);
 #endif
 
 
-// Порог как у Log (src/logging.cpp, DSERVER_LOG_LEVEL; по умолчанию error): ниже — не
-// форматируем вовсе (vsnprintf и сборка строки в хуке стоили ~10% CPU сервера).
-extern char* getenv(const char* name);  // libc хоста (сборка без stdlib.h)
+// Same threshold as Log (src/logging.cpp, DSERVER_LOG_LEVEL; error by default): below it nothing
+// is formatted (vsnprintf and building the string in the hook cost ~10% of server CPU).
+extern char* getenv(const char* name);  // host libc (built without stdlib.h)
 
 static int dtape_log_min_level(void) {
 	static int min = -1;

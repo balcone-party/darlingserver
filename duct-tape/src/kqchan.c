@@ -430,7 +430,7 @@ knote_set_error(struct knote *kn, int error)
 
 // </copied>
 
-// iosc: состояние kqchan Mach-порта для дампа сервера (src/dump.cpp)
+// iosc: Mach port kqchan state for the server dump (src/dump.cpp)
 void dtape_kqchan_mach_port_describe(dtape_kqchan_mach_port_t* kqchan, char* buf, size_t size) {
 	ipc_mqueue_t mq = kqchan->knote.kn_mqueue;
 	if (!mq) {
@@ -443,8 +443,8 @@ void dtape_kqchan_mach_port_describe(dtape_kqchan_mach_port_t* kqchan, char* buf
 		dtape_kqchan_mach_port_has_events(kqchan), kqchan->knote.kn_status, kqchan->callback, kqchan->waitq);
 };
 
-// iosc: receive-права задачи с непустой очередью (для дампа сервера): имя, msgcount/qlimit,
-// есть ли knote (kqchan) на очереди. Без замков — снимок для отладки зависаний.
+// iosc: the task's receive rights with a non-empty queue (for the server dump): name, msgcount/qlimit,
+// whether a knote (kqchan) is on the queue. No locks: a snapshot for debugging hangs.
 void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const char* line), void* ctx) {
 	ipc_space_t space = task->xnu_task.itk_space;
 	if (!space || !is_active(space)) {
@@ -452,8 +452,8 @@ void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const 
 	}
 	ipc_entry_t table = space->is_table;
 	ipc_entry_num_t size = space->is_table_size;
-	// DSERVER_DUMP_ALL_PORTS=1 — все права (recv/send/sonce) с адресом порта: куда на самом деле
-	// идут сообщения по имени send-права (сверка адресов между процессами)
+	// DSERVER_DUMP_ALL_PORTS=1: all rights (recv/send/sonce) with the port address: where messages
+	// to a send right's name really go (match addresses across processes)
 	static int all = -1;
 	if (all < 0)
 		all = getenv("DSERVER_DUMP_ALL_PORTS") != NULL;
@@ -462,7 +462,7 @@ void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const 
 		if (all && e->ie_object && (IE_BITS_TYPE(e->ie_bits) & (MACH_PORT_TYPE_RECEIVE | MACH_PORT_TYPE_SEND | MACH_PORT_TYPE_SEND_ONCE))) {
 			ipc_port_t p = ip_object_to_port(e->ie_object);
 			char line[200];
-			snprintf(line, sizeof(line), "право %s%s%s %#x ip=%p активен=%d msgcount=%u qlimit=%u",
+			snprintf(line, sizeof(line), "right %s%s%s %#x ip=%p active=%d msgcount=%u qlimit=%u",
 				(IE_BITS_TYPE(e->ie_bits) & MACH_PORT_TYPE_RECEIVE) ? "R" : "",
 				(IE_BITS_TYPE(e->ie_bits) & MACH_PORT_TYPE_SEND) ? "S" : "",
 				(IE_BITS_TYPE(e->ie_bits) & MACH_PORT_TYPE_SEND_ONCE) ? "O" : "",
@@ -488,11 +488,11 @@ void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const 
 		ipc_port_t port = ip_object_to_port(e->ie_object);
 		ipc_mqueue_t mq = &port->ip_messages;
 		if (!(IE_BITS_TYPE(e->ie_bits) & MACH_PORT_TYPE_RECEIVE)) {
-			// send-право на порт с полной очередью: кто получатель (адрес и имя у него)
+			// a send right to a port with a full queue: who receives (address and its name there)
 			if (ip_active(port)
 				&& mq->imq_qlimit && mq->imq_msgcount >= mq->imq_qlimit) {
 				char line[160];
-				snprintf(line, sizeof(line), "send %#x -> ip=%p имя у получателя %#x msgcount=%u qlimit=%u",
+				snprintf(line, sizeof(line), "send %#x -> ip=%p receiver name %#x msgcount=%u qlimit=%u",
 					MACH_PORT_MAKE(i, IE_BITS_GEN(e->ie_bits)), port, port->ip_receiver_name,
 					mq->imq_msgcount, mq->imq_qlimit);
 				out(ctx, line);
@@ -505,28 +505,28 @@ void dtape_task_describe_ports(dtape_task_t* task, void (*out)(void* ctx, const 
 		char line[256];
 		ipc_kmsg_t km = ipc_kmsg_queue_first(&mq->imq_messages);
 		mach_msg_header_t *h = km ? km->ikm_header : NULL;
-		snprintf(line, sizeof(line), "имя %#x ip=%p msgcount=%u qlimit=%u очередь=%s knote=%s первое: id %d size %u bits %#x",
+		snprintf(line, sizeof(line), "name %#x ip=%p msgcount=%u qlimit=%u queue=%s knote=%s first: id %d size %u bits %#x",
 			MACH_PORT_MAKE(i, IE_BITS_GEN(e->ie_bits)), port, mq->imq_msgcount, mq->imq_qlimit,
-			ipc_kmsg_queue_empty(&mq->imq_messages) ? "пуста" : "есть", SLIST_EMPTY(&mq->imq_klist) ? "нет" : "есть",
+			ipc_kmsg_queue_empty(&mq->imq_messages) ? "empty" : "yes", SLIST_EMPTY(&mq->imq_klist) ? "no" : "yes",
 			h ? h->msgh_id : 0, h ? h->msgh_size : 0, h ? h->msgh_bits : 0);
 		size_t ln = strlen(line);
 		snprintf(line + ln, sizeof(line) - ln, " in_set=%#llx prepost=%#llx",
 			(unsigned long long)port->ip_messages.imq_wait_queue.waitq_set_id,
 			(unsigned long long)port->ip_messages.imq_wait_queue.waitq_prepost_id);
 		out(ctx, line);
-		// полный режим: все сообщения очереди — reply-порт и порты из дескрипторов (адреса), чтобы
-		// найти права, «застрявшие в пути» внутри непрочитанных сообщений
+		// full mode: every queued message with its reply port and descriptor ports (addresses), to
+		// find rights stuck in transit inside unread messages
 		for (ipc_kmsg_t k = km; all && k; k = k->ikm_next) {
 			mach_msg_header_t *kh = k->ikm_header;
-			int n = snprintf(line, sizeof(line), "  сообщение id %d size %u reply=%p", kh->msgh_id, kh->msgh_size, (void *)kh->msgh_local_port);
+			int n = snprintf(line, sizeof(line), "  message id %d size %u reply=%p", kh->msgh_id, kh->msgh_size, (void *)kh->msgh_local_port);
 			if (kh->msgh_bits & MACH_MSGH_BITS_COMPLEX) {
 				mach_msg_body_t *body = (mach_msg_body_t *)(kh + 1);
 				mach_msg_descriptor_t *d = (mach_msg_descriptor_t *)(body + 1);
 				for (mach_msg_size_t j = 0; j < body->msgh_descriptor_count && j < 8 && n < (int)sizeof(line) - 40; j++, d++) {
 					if (d->type.type == MACH_MSG_PORT_DESCRIPTOR)
-						n += snprintf(line + n, sizeof(line) - n, " порт %p/%u", (void *)d->port.name, d->port.disposition);
+						n += snprintf(line + n, sizeof(line) - n, " port %p/%u", (void *)d->port.name, d->port.disposition);
 					else
-						n += snprintf(line + n, sizeof(line) - n, " тип %u", d->type.type);
+						n += snprintf(line + n, sizeof(line) - n, " type %u", d->type.type);
 				}
 			}
 			out(ctx, line);

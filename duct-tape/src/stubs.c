@@ -169,8 +169,8 @@ int proc_get_effective_thread_policy(thread_t thread, int flavor) {
 		case TASK_POLICY_LATENCY_QOS:
 			return 0;
 		default:
-			// без предупреждения: TASK_POLICY_QOS из thread_policy.c зовётся ~100 раз в секунду.
-			// Значение прежнее (-1): с 0 (THREAD_QOS_UNSPECIFIED) потоки зависали в
+			// no warning: thread_policy.c asks TASK_POLICY_QOS ~100 times a second.
+			// Keep -1: with 0 (THREAD_QOS_UNSPECIFIED) threads hung in
 			// ipc_mqueue_override_send
 			return -1;
 	}

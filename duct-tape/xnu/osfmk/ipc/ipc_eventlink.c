@@ -51,7 +51,7 @@
 #include <libkern/OSAtomic.h>
 
 #ifdef __DARLING__
-// startup-секций нет — зону создаёт dtape_init
+// no startup sections: dtape_init creates the zone
 zone_t ipc_eventlink_zone;
 #else
 static ZONE_DECLARE(ipc_eventlink_zone, "ipc_eventlink",

@@ -284,7 +284,7 @@ bool DarlingServer::Call::isBSDTrap() const {
 	return false;
 };
 
-// хеш адреса сокета клиента (у каждого потока свой) — связать ответ с вызовом в трассировке
+// hash of the client socket address (one per thread): ties a reply to its call in the trace
 static uint64_t traceAddr(const DarlingServer::Address& a) {
 	uint64_t h = 1469598103934665603ull;
 	const uint8_t* b = reinterpret_cast<const uint8_t*>(&a.raw());

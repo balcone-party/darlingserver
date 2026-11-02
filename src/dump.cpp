@@ -1,10 +1,10 @@
 /**
- * iosc: дамп микропотоков сервера по запросу — `touch <prefix>/dump.req` (inotify),
- * вывод — <prefix>/dump/dserver.txt. Для каждого потока: pid/tid (хост и пространство имён
- * контейнера), активный/ожидающий вызов, состояние микропотока, ожидание в duct-tape
- * (wait_event, wmesg) и цепочка кадров приостановленного микропотока. Микропотоки не видны
- * в стеках ОС — без этого «RPC не вернулся» не отличить от «микропоток ждёт на waitq».
- * Адреса внутри исполняемого файла печатаются как exe+0x… (для addr2line).
+ * iosc: on-demand dump of the server's microthreads: `touch <prefix>/dump.req` (inotify),
+ * output in <prefix>/dump/dserver.txt. Per thread: pid/tid (host and container namespace),
+ * active/pending call, microthread state, the duct-tape wait (wait_event, wmesg) and the frame
+ * chain of a suspended microthread. Microthreads are invisible in OS stacks; without this
+ * "the RPC never returned" cannot be told apart from "the microthread waits on a waitq".
+ * Addresses inside the executable are printed as exe+0x… (for addr2line).
  */
 
 #include <darlingserver/calltrace.hpp>
@@ -32,7 +32,7 @@
 
 extern "C" char __executable_start, _end;
 
-// Чтение своей памяти без риска SIGSEGV: поток мог умереть, и его память — освободиться.
+// Reads our own memory without risking SIGSEGV: the thread may have died and its memory been freed.
 static bool peek(const void* address, void* out, size_t size) {
 	struct iovec local = { out, size }, remote = { const_cast<void*>(address), size };
 	return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)size;
@@ -51,14 +51,14 @@ static void printAddress(int fd, uintptr_t address) {
 	}
 };
 
-// iosc: kqchan Mach-портов каждого процесса — порт, флаги уведомлений, очередь в duct-tape
+// iosc: each process's Mach port kqchans: port, notification flags, the duct-tape queue
 void DarlingServer::dumpKqchans(int fd) {
 	for (auto& process: DarlingServer::processRegistry().copyEntries()) {
 		if (process->_dtapeTask) {
 			struct Ctx { int fd; pid_t pid, nspid; } c = { fd, process->id(), process->nsid() };
 			dtape_task_describe_ports(process->_dtapeTask, [](void* ctx, const char* line) {
 				auto c = static_cast<Ctx*>(ctx);
-				dprintf(c->fd, "порт процесс %d (ns %d) %s\n", c->pid, c->nspid, line);
+				dprintf(c->fd, "port process %d (ns %d) %s\n", c->pid, c->nspid, line);
 			}, &c);
 		}
 		std::shared_lock lock(process->_rwlock);
@@ -71,7 +71,7 @@ void DarlingServer::dumpKqchans(int fd) {
 			if (mp->_dtapeKqchan) {
 				dtape_kqchan_mach_port_describe(mp->_dtapeKqchan, buf, sizeof(buf));
 			}
-			dprintf(fd, "kqchan %llu процесс %d (ns %d) порт %#x canSend=%d canSendNotification=%d defer=%d deferred=%d notifications=%llu %s\n",
+			dprintf(fd, "kqchan %llu process %d (ns %d) port %#x canSend=%d canSendNotification=%d defer=%d deferred=%d notifications=%llu %s\n",
 				(unsigned long long)mp->_debugID, process->id(), process->nsid(), mp->_port, mp->_canSend,
 				mp->_canSendNotification, mp->_deferNotification, mp->_deferredNotification.has_value(),
 				(unsigned long long)mp->_notificationCount, buf);
@@ -84,10 +84,10 @@ void DarlingServer::dumpThreads(int fd) {
 	time_t now = time(nullptr);
 	char when[64];
 	strftime(when, sizeof(when), "%F %T", localtime(&now));
-	dprintf(fd, "=== darlingserver pid %d, %s, потоков %zu, exe=%p\n", getpid(), when, threads.size(), (void*)&__executable_start);
+	dprintf(fd, "=== darlingserver pid %d, %s, threads %zu, exe=%p\n", getpid(), when, threads.size(), (void*)&__executable_start);
 
 	for (auto& thread: threads) {
-		// чужой поток может держать замок долго (он и завис) — читаем и без него
+		// another thread may hold the lock for long (it is the one hung): read without it
 		bool locked = thread->_rwlock.try_lock_shared();
 
 		auto process = thread->_process;
@@ -98,12 +98,12 @@ void DarlingServer::dumpThreads(int fd) {
 			path = "<kernel>";
 		}
 
-		dprintf(fd, "поток %d (ns %d) процесс %d (ns %d) %s%s\n", thread->_tid, thread->_nstid,
-			process ? process->id() : -1, process ? process->nsid() : -1, path.c_str(), locked ? "" : " [замок занят]");
-		dprintf(fd, "  вызов: активный %s, ожидающий %s\n",
+		dprintf(fd, "thread %d (ns %d) process %d (ns %d) %s%s\n", thread->_tid, thread->_nstid,
+			process ? process->id() : -1, process ? process->nsid() : -1, path.c_str(), locked ? "" : " [lock busy]");
+		dprintf(fd, "  call: active %s, pending %s\n",
 			active ? Call::callNumberToString(active->number()) : "-",
 			pending ? Call::callNumberToString(pending->number()) : "-");
-		dprintf(fd, "  состояние:%s%s%s%s%s%s прерываний %zu (ждут %zu)\n",
+		dprintf(fd, "  state:%s%s%s%s%s%s interrupts %zu (pending %zu)\n",
 			thread->_running ? " running" : "",
 			thread->_suspended ? " suspended" : "",
 			thread->_continuationCallback ? " continuation" : "",
@@ -119,15 +119,15 @@ void DarlingServer::dumpThreads(int fd) {
 				dtape_thread_describe((dtape_thread_t*)copy.data(), buf, sizeof(buf), inImage);
 				dprintf(fd, "  dtape: %s\n", buf);
 			} else {
-				dprintf(fd, "  dtape: %p недоступен\n", (void*)dtape);
+				dprintf(fd, "  dtape: %p unreadable\n", (void*)dtape);
 			}
 		}
 
-		// приостановлен без продолжения — стек микропотока цел, контекст из getcontext в suspend()
+		// suspended without a continuation: the microthread stack is intact, context from getcontext in suspend()
 		if (thread->_suspended && !thread->_continuationCallback && thread->_stack.base) {
 			uintptr_t lo = (uintptr_t)thread->_stack.base, hi = lo + thread->_stack.size;
 			uintptr_t fp = thread->_resumeContext.uc_mcontext.regs[29];
-			dprintf(fd, "  стек:");
+			dprintf(fd, "  stack:");
 			printAddress(fd, thread->_resumeContext.uc_mcontext.pc);
 			uintptr_t frame[2];
 			for (int depth = 0; depth < 32 && fp >= lo && fp + 16 <= hi && !(fp & 7) && peek((void*)fp, frame, sizeof(frame)); ++depth) {
@@ -150,7 +150,7 @@ void DarlingServer::dumpThreads(int fd) {
 
 void DarlingServer::startDumpWatcher(const char* prefix) {
 	std::string dir = prefix;
-	// сигналы процесса — не этому потоку (сервер раздаёт их своим потокам и signalfd)
+	// process signals are not for this thread (the server routes them to its own threads and signalfd)
 	sigset_t all, old;
 	sigfillset(&all);
 	pthread_sigmask(SIG_BLOCK, &all, &old);
@@ -188,12 +188,12 @@ void DarlingServer::startDumpWatcher(const char* prefix) {
 			}
 			dumpThreads(fd);
 			{
-				// кольцо событий вызовов (calltrace.hpp), от старых к новым
+				// the call event ring (calltrace.hpp), oldest first
 				uint64_t end = CallTrace::next.load(), begin = end > CallTrace::kSize ? end - CallTrace::kSize : 0;
-				dprintf(fd, "trace: %llu событий\n", (unsigned long long)end);
+				dprintf(fd, "trace: %llu events\n", (unsigned long long)end);
 				for (uint64_t i = begin; i < end; i++) {
 					auto& e = CallTrace::ring[i % CallTrace::kSize];
-					// редкие события — из всего кольца, остальные — последние 50 тыс.
+					// rare events from the whole ring, the rest from the last 50k
 					if (end - i > 50000 && !strchr("kKnxspabcr", e.ev)) {
 						continue;
 					}
