@@ -1411,6 +1411,10 @@ host_set_atm_diagnostic_flag(host_t host, uint32_t diagnostic_flag)
 
 #if CONFIG_ATM
 	return atm_set_diagnostic_config(diagnostic_flag);
+#elif defined(__DARLING__)
+	// iosc: no ATM; diagnosticd exits (74) when this fails, and with it every live os_log stream
+	(void)diagnostic_flag;
+	return KERN_SUCCESS;
 #else
 	(void)diagnostic_flag;
 	return KERN_NOT_SUPPORTED;
