@@ -72,6 +72,16 @@ static inline void darling_dserver_makecontext_arm64(ucontext_t* ucp, void (*fun
 #endif
 #define setcontext(u) darling_libucontext_setcontext(u)
 #define swapcontext(ou, nu) darling_libucontext_swapcontext(ou, nu)
+#elif defined(__aarch64__) && defined(__GLIBC__)
+// src/ucontext_arm64.S: switches without rt_sigprocmask
+extern "C" {
+int dserver_getcontext(ucontext_t*) __attribute__((returns_twice));
+int dserver_setcontext(const ucontext_t*);
+int dserver_swapcontext(ucontext_t*, const ucontext_t*) __attribute__((returns_twice));
+}
+#define getcontext(u) dserver_getcontext(u)
+#define setcontext(u) dserver_setcontext(u)
+#define swapcontext(ou, nu) dserver_swapcontext(ou, nu)
 #endif
 #include <vector>
 #if defined(__aarch64__)

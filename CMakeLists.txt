@@ -1,4 +1,4 @@
-project(darlingserver)
+project(darlingserver C CXX ASM)
 
 cmake_minimum_required(VERSION 3.13)
 
@@ -114,6 +114,7 @@ add_executable(darlingserver
 	src/logging.cpp
 	src/process.cpp
 	src/thread.cpp
+	$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},aarch64>:src/ucontext_arm64.S>
 	src/dump.cpp
 	src/utility.cpp
 	src/kqchan.cpp
