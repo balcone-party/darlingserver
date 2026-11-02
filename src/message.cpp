@@ -620,9 +620,12 @@ bool DarlingServer::MessageQueue::receiveMany(int socket) {
 	struct mmsghdr mmsgs[16];
 	int ret = 0;
 
-	while (ret >= 0) {
-		std::array<Message, sizeof(mmsgs) / sizeof(*mmsgs)> messages;
+	if (_receiveSlots.empty()) {
+		_receiveSlots.resize(sizeof(mmsgs) / sizeof(*mmsgs));
+	}
+	auto& messages = _receiveSlots;
 
+	while (ret >= 0) {
 		for (size_t i = 0; i < messages.size(); ++i) {
 			mmsgs[i].msg_hdr = messages[i].rawHeader();
 			mmsgs[i].msg_len = 0;
@@ -646,6 +649,7 @@ bool DarlingServer::MessageQueue::receiveMany(int socket) {
 			messages[i].data().resize(mmsgs[i].msg_len);
 			messages[i].setAddress(Address(*(const struct sockaddr_un*)mmsgs[i].msg_hdr.msg_name, mmsgs[i].msg_hdr.msg_namelen));
 			_messages.push_back(std::move(messages[i]));
+			messages[i] = Message();
 		}
 	}
 

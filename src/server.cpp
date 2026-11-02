@@ -533,6 +533,11 @@ void DarlingServer::Server::start() {
 	// perform dtape initialization that requires a microthread context
 	Thread::kernelSync(dtape_init_in_thread);
 
+	// the wakeup eventfd is read and re-armed (oneshot) only after it fired or when the wanted
+	// state changes: doing both on every iteration was two wasted syscalls per call
+	bool wakeupFired = true;
+	uint32_t wakeupArmed = ~0u;
+
 	while (true) {
 		if (_canRead) {
 			_canRead = _inbox.receiveMany(_listenerSocket);
@@ -549,8 +554,10 @@ void DarlingServer::Server::start() {
 		}
 
 		// reset the eventfd by reading from it
-		eventfd_t value;
-		eventfd_read(_wakeupFD, &value);
+		if (wakeupFired) {
+			eventfd_t value;
+			eventfd_read(_wakeupFD, &value);
+		}
 
 		if (_canWrite) {
 			_canWrite = _outbox.sendMany(_listenerSocket);
@@ -560,9 +567,13 @@ void DarlingServer::Server::start() {
 		settings.data.ptr = &_wakeupFD;
 		settings.events = (_canWrite) ? (EPOLLIN | EPOLLONESHOT) : 0;
 
-		if (epoll_ctl(_epollFD, EPOLL_CTL_MOD, _wakeupFD, &settings) < 0) {
-			throw std::system_error(errno, std::generic_category(), "Failed to modify eventfd in epoll context");
+		if (wakeupFired || settings.events != wakeupArmed) {
+			if (epoll_ctl(_epollFD, EPOLL_CTL_MOD, _wakeupFD, &settings) < 0) {
+				throw std::system_error(errno, std::generic_category(), "Failed to modify eventfd in epoll context");
+			}
+			wakeupArmed = settings.events;
 		}
+		wakeupFired = false;
 
 		struct epoll_event events[16];
 		int ret = epoll_wait(_epollFD, events, 16, -1);
@@ -587,6 +598,7 @@ void DarlingServer::Server::start() {
 					_canWrite = true;
 				}
 			} else if (event->data.ptr == &_wakeupFD) {
+				wakeupFired = true;
 				// we allow the loop to go back to the top and try to send some messages
 				// (if _canWrite is true, the eventfd will be reset; otherwise, there's no point in resetting it)
 			} else if (event->data.ptr == &_timerFD) {

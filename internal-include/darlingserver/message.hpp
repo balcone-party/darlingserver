@@ -167,6 +167,9 @@ namespace DarlingServer {
 	class MessageQueue {
 	private:
 		std::deque<Message> _messages;
+		// receiveMany's receive buffers, kept between calls: a Message costs two allocations, and
+		// constructing all of them on every wakeup was a fifth of the server's CPU
+		std::vector<Message> _receiveSlots;
 		mutable std::mutex _lock;
 		std::function<void()> _messageArrivalNotificationCallback = nullptr;
 
