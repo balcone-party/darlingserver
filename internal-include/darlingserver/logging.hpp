@@ -43,6 +43,7 @@ namespace DarlingServer {
 
 		void _log(Type type, std::string message) const;
 		static std::string _typeToString(Type type);
+		static Type _minLevel();
 
 	public:
 		Log(std::string category);
@@ -74,6 +75,9 @@ namespace DarlingServer {
 	private:
 		Type _type;
 		const Log& _log;
+		// decided once per message: disabled levels skip formatting entirely (debug calls sit on
+		// every Mach IPC path)
+		bool _enabled;
 		std::ostringstream _buffer;
 
 		Stream(Type type, const Log& log);
@@ -91,7 +95,8 @@ namespace DarlingServer {
 
 		template<class T>
 		std::enable_if_t<!std::is_base_of_v<Loggable, T>, Stream&> operator<<(const T& value) {
-			_buffer << value;
+			if (_enabled)
+				_buffer << value;
 			return *this;
 		};
 	};
