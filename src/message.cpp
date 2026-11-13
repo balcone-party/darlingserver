@@ -573,6 +573,31 @@ bool DarlingServer::MessageQueue::sendMany(int socket) {
 	return canSendMore;
 };
 
+bool DarlingServer::MessageQueue::sendConnected(int socket, Message& message, bool* refused) {
+	*refused = false;
+	std::unique_lock lock(_lock);
+	if (!_messages.empty()) {
+		return false;
+	}
+	struct msghdr hdr = message.rawHeader();
+	hdr.msg_name = nullptr;
+	hdr.msg_namelen = 0;
+	ssize_t ret;
+	do {
+		ret = sendmsg(socket, &hdr, MSG_DONTWAIT | MSG_NOSIGNAL);
+	} while (ret < 0 && errno == EINTR);
+	if (ret < 0) {
+		*refused = errno == ECONNREFUSED || errno == ENOTCONN || errno == EPIPE || errno == ECONNRESET;
+		return false;
+	}
+	auto cb = message.sendNotificationCallback();
+	lock.unlock();
+	if (cb) {
+		cb();
+	}
+	return true;
+};
+
 void DarlingServer::MessageQueue::sendOrPush(int socket, Message&& message) {
 	std::unique_lock lock(_lock);
 	if (_messages.empty()) {

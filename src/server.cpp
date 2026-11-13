@@ -493,6 +493,11 @@ DarlingServer::Server::Server(std::string prefix):
 		}
 	}
 
+	{
+		const char* env = getenv("IOSC_DS_REPLY_CONN");
+		_replyConnected = !(env && env[0] == '0');
+	}
+
 	struct epoll_event settings;
 	settings.data.ptr = this;
 	settings.events = (_workerWakeFD >= 0 ? 0 : EPOLLIN) | EPOLLOUT | EPOLLET;
@@ -886,6 +891,44 @@ std::shared_ptr<DarlingServer::FD> DarlingServer::Monitor::fd() const {
 	return _fd;
 };
 
+int DarlingServer::Server::_replySocketFor(const Address& address) {
+	size_t len = address.rawSize();
+	if (len <= offsetof(struct sockaddr_un, sun_path) || len > sizeof(struct sockaddr_un)) {
+		return -1;
+	}
+	std::string key(reinterpret_cast<const char*>(&address.raw()), len);
+	auto it = _replySockets.find(key);
+	if (it != _replySockets.end()) {
+		return it->second;
+	}
+	if (_replySockets.size() >= 8192) {
+		// threads come and go; a full table is simply started over
+		for (auto& [k, fd]: _replySockets) {
+			close(fd);
+		}
+		_replySockets.clear();
+	}
+	int fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (fd < 0) {
+		return -1;
+	}
+	if (connect(fd, reinterpret_cast<const struct sockaddr*>(&address.raw()), len) < 0) {
+		close(fd);
+		return -1;
+	}
+	_replySockets.emplace(std::move(key), fd);
+	return fd;
+};
+
+void DarlingServer::Server::_dropReplySocket(const Address& address, int fd) {
+	std::string key(reinterpret_cast<const char*>(&address.raw()), address.rawSize());
+	auto it = _replySockets.find(key);
+	if (it != _replySockets.end() && it->second == fd) {
+		close(fd);
+		_replySockets.erase(it);
+	}
+};
+
 void DarlingServer::Server::sendMessage(Message&& message) {
 	// The reply goes straight from the worker thread, without an eventfd and an epoll thread wakeup.
 	// DSERVER_DIRECT_REPLY=0 sends it through the outbox instead.
@@ -893,6 +936,21 @@ void DarlingServer::Server::sendMessage(Message&& message) {
 		const char* env = getenv("DSERVER_DIRECT_REPLY");
 		return !(env && env[0] == '0');
 	}();
+	if (direct && _replyConnected) {
+		// held across the send: a socket is never closed while another thread sends on it
+		std::unique_lock lock(_replySocketsLock);
+		int fd = _replySocketFor(message.address());
+		if (fd >= 0) {
+			bool refused;
+			if (_outbox.sendConnected(fd, message, &refused)) {
+				return;
+			}
+			if (refused) {
+				// the client socket closed; its name may already belong to another socket
+				_dropReplySocket(message.address(), fd);
+			}
+		}
+	}
 	if (direct) {
 		_outbox.sendOrPush(_listenerSocket, std::move(message));
 	} else {

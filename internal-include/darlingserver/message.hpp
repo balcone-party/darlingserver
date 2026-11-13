@@ -182,6 +182,9 @@ namespace DarlingServer {
 		bool sendMany(int socket);
 		// Send right from the calling thread if the queue is empty; otherwise (or on EAGAIN) queue it.
 		void sendOrPush(int socket, Message&& message);
+		// iosc: send on a socket connected to the message's destination when nothing is queued
+		// (ordering); false: not sent, the caller falls back to sendOrPush. *refused: the peer is gone.
+		bool sendConnected(int socket, Message& message, bool* refused);
 		bool receiveMany(int socket);
 
 		bool empty() const;

@@ -50,6 +50,13 @@ namespace DarlingServer {
 		int _wakeupFD;
 		// iosc: the worker reads the listener socket itself (unless IOSC_DS_WORKER_RECV=0), -1 otherwise
 		int _workerWakeFD = -1;
+		// iosc: sockets connected to client thread addresses (off with IOSC_DS_REPLY_CONN=0): a reply is a
+		// send() on one instead of a sendmsg() that looks the abstract name up every time
+		bool _replyConnected = false;
+		std::mutex _replySocketsLock;
+		std::unordered_map<std::string, int> _replySockets;
+		int _replySocketFor(const Address& address);  // both with _replySocketsLock held
+		void _dropReplySocket(const Address& address, int fd);
 		void _workerIdleWait(std::vector<std::shared_ptr<Thread>>& items);
 		int _timerFD;
 		uint64_t _currentTimerDeadline = 0;
