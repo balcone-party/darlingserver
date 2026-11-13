@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <sys/un.h>
 #include <sys/epoll.h>
+#include <poll.h>
 #include <fcntl.h>
 #include <system_error>
 #include <thread>
@@ -479,9 +480,22 @@ DarlingServer::Server::Server(std::string prefix):
 		throw std::system_error(errno, std::generic_category(), "Failed to create epoll context");
 	}
 
+	// One hop less per call: in single-threaded mode the idle worker waits on the socket itself
+	// instead of being handed each call by the epoll thread through the work queue.
+	// IOSC_DS_WORKER_RECV=0 restores the hand-off.
+	if (Config::singleThreadedWorkQueue) {
+		const char* env = getenv("IOSC_DS_WORKER_RECV");
+		if (!(env && env[0] == '0')) {
+			_workerWakeFD = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+			if (_workerWakeFD < 0) {
+				throw std::system_error(errno, std::generic_category(), "Failed to create eventfd for the worker");
+			}
+		}
+	}
+
 	struct epoll_event settings;
 	settings.data.ptr = this;
-	settings.events = EPOLLIN | EPOLLOUT | EPOLLET;
+	settings.events = (_workerWakeFD >= 0 ? 0 : EPOLLIN) | EPOLLOUT | EPOLLET;
 
 	if (epoll_ctl(_epollFD, EPOLL_CTL_ADD, _listenerSocket, &settings) < 0) {
 		throw std::system_error(errno, std::generic_category(), "Failed to add listener socket to epoll context");
@@ -501,6 +515,15 @@ DarlingServer::Server::Server(std::string prefix):
 		// once the socket becomes writable again, the eventfd will be monitored again.
 		eventfd_write(_wakeupFD, 1);
 	});
+
+	if (_workerWakeFD >= 0) {
+		_workQueue.setIdleWait(
+			[this](std::vector<std::shared_ptr<Thread>>& items) { _workerIdleWait(items); },
+			[this]() { eventfd_write(_workerWakeFD, 1); });
+		// the worker is already parked on the queue's condition variable: an empty item moves it
+		// into the idle wait
+		_workQueue.push(nullptr);
+	}
 
 	_timerFD = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
 	if (_timerFD < 0) {
@@ -694,7 +717,48 @@ std::string DarlingServer::Server::prefix() const {
 };
 
 void DarlingServer::Server::_worker(std::shared_ptr<Thread> thread) {
-	thread->doWork();
+	if (thread) {
+		thread->doWork();
+	}
+};
+
+void DarlingServer::Server::_workerIdleWait(std::vector<std::shared_ptr<Thread>>& items) {
+	while (true) {
+		bool more = _inbox.receiveMany(_listenerSocket);
+
+		while (auto msg = _inbox.pop()) {
+			auto call = DarlingServer::Call::callFromMessage(std::move(*msg));
+			if (call) {
+				auto t = call->thread();
+				CallTrace::add('Q', -1, t ? t->nsid() : -1, (uint32_t)call->number());
+				items.push_back(t);
+			}
+		}
+
+		if (!items.empty()) {
+			return;
+		}
+		if (more) {
+			continue;
+		}
+
+		struct pollfd fds[2] = {
+			{ .fd = _listenerSocket, .events = POLLIN },
+			{ .fd = _workerWakeFD, .events = POLLIN },
+		};
+		if (poll(fds, 2, -1) < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			throw std::system_error(errno, std::generic_category(), "Failed to wait for calls in the worker");
+		}
+		if (fds[1].revents & POLLIN) {
+			// work was pushed by another thread
+			eventfd_t value;
+			eventfd_read(_workerWakeFD, &value);
+			return;
+		}
+	}
 };
 
 void DarlingServer::Server::scheduleThread(std::shared_ptr<Thread> thread) {

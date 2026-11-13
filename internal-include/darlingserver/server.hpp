@@ -48,6 +48,9 @@ namespace DarlingServer {
 		bool _canRead = false;
 		bool _canWrite = true;
 		int _wakeupFD;
+		// iosc: the worker reads the listener socket itself (unless IOSC_DS_WORKER_RECV=0), -1 otherwise
+		int _workerWakeFD = -1;
+		void _workerIdleWait(std::vector<std::shared_ptr<Thread>>& items);
 		int _timerFD;
 		uint64_t _currentTimerDeadline = 0;
 		std::mutex _timerLock;

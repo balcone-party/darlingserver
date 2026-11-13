@@ -43,6 +43,12 @@ namespace DarlingServer {
 		size_t _threadsAvailable = 0;
 		std::condition_variable _cv;
 		bool _dying = false;
+		// iosc: an idle permanent worker waits in _idleWait (the server's socket) instead of on the
+		// condition variable; push() from another thread interrupts it with _idleWake.
+		std::function<void(std::vector<WorkItem>&)> _idleWait;
+		std::function<void()> _idleWake;
+		std::vector<WorkItem> _idleItems;
+		bool _idleWaiting = false;
 
 		static constexpr unsigned int minimumThreads() {
 			return (Config::singleThreadedWorkQueue) ? 1 : 2;
@@ -97,7 +103,20 @@ namespace DarlingServer {
 					return false;
 				};
 
-				if (permanent) {
+				if (permanent && _idleWait) {
+					while (!predicate()) {
+						_idleWaiting = true;
+						lock.unlock();
+						_idleWait(_idleItems);
+						lock.lock();
+						_idleWaiting = false;
+						for (auto& item: _idleItems) {
+							_workItems.push(std::move(item));
+						}
+						_idleItems.clear();
+					}
+					waitResult = true;
+				} else if (permanent) {
 					// permanent workers just wait until there's work available (or the queue is being destroyed)
 					_cv.wait(lock, predicate);
 					waitResult = true;
@@ -158,9 +177,23 @@ namespace DarlingServer {
 		WorkQueue(WorkQueue&&) = delete;
 		WorkQueue& operator=(WorkQueue&&) = delete;
 
+		// Only before any work is pushed; single-threaded queues only.
+		void setIdleWait(std::function<void(std::vector<WorkItem>&)> wait, std::function<void()> wake) {
+			std::scoped_lock lock(_queueMutex);
+			_idleWait = std::move(wait);
+			_idleWake = std::move(wake);
+		};
+
 		void push(WorkItem workItem) {
 			std::unique_lock lock(_queueMutex);
 			_workItems.push(std::move(workItem));
+
+			if (_idleWaiting) {
+				_idleWaiting = false;
+				lock.unlock();
+				_idleWake();
+				return;
+			}
 
 			// if there are no threads available to perform the work AND we have less than the
 			// maximum number of worker threads currently active, spawn a temporary worker thread.
