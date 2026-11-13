@@ -68,6 +68,9 @@
 #include <mach/message.h>
 #include <ipc/ipc_mqueue.h>
 #include <ipc/ipc_object.h>
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/lanes.h>
+#endif
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_space.h>
@@ -235,6 +238,12 @@ ipc_pset_add(
 
 	assert(ips_active(pset));
 	require_ip_active(port);
+
+#ifdef __DARLING__
+	if (port->ip_lane) {
+		iosc_lane_close(port, false);  /* iosc: set members are received through the server */
+	}
+#endif
 
 	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages,
 	    reserved_link, reserved_prepost);
@@ -845,6 +854,11 @@ lookup_again:
 		 * first message in the queue.
 		 */
 		ip_lock(port);
+#ifdef __DARLING__
+		if (port->ip_lane) {
+			iosc_lane_close(port, false);  /* iosc: a watched port goes back to the server's queue */
+		}
+#endif
 		imq_lock(mqueue);
 
 		kn->kn_mqueue = mqueue;

@@ -94,4 +94,22 @@ void dtape_run_port_ops(uint64_t ops, uint32_t ops_count) {
 	run_port_ops(ops, ops_count);
 };
 
+// iosc: the receive behind a lane's SERVER entry; the message is queued already, so no waiting
+int dtape_lane_take(uint64_t msg, uint32_t rcv_size, uint32_t rcv_name, int32_t option) {
+	struct mach_msg_overwrite_trap_args args = {
+		.msg = msg,
+		.option = (option & ~(MACH_SEND_MSG | MACH_RCV_TIMEOUT)) | MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+		.send_size = 0,
+		.rcv_size = rcv_size,
+		.rcv_name = rcv_name,
+		.timeout = 0,
+		.priority = 0,
+		.rcv_msg = 0,
+	};
+	current_thread()->iosc_lane_take = 1;
+	int r = mach_msg_overwrite_trap(&args);
+	current_thread()->iosc_lane_take = 0;
+	return r;
+};
+
 DSERVER_DTAPE_DEFS;

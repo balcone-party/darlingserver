@@ -58,6 +58,10 @@ namespace DarlingServer {
 		int _replySocketFor(const Address& address);  // both with _replySocketsLock held
 		void _dropReplySocket(const Address& address, int fd);
 		void _workerIdleWait(std::vector<std::shared_ptr<Thread>>& items);
+		// iosc: Mach message lanes region (IOSC_LANES=1), -1 without
+		int _lanesFD = -1;
+		void* _lanesBase = nullptr;
+		uint64_t _lanesSize = 0;
 		int _timerFD;
 		uint64_t _currentTimerDeadline = 0;
 		std::mutex _timerLock;
@@ -88,6 +92,8 @@ namespace DarlingServer {
 		static Server& sharedInstance();
 
 		void scheduleThread(std::shared_ptr<Thread> thread);
+
+		int lanesRegion(uint64_t* size) const;
 
 		void addMonitor(std::shared_ptr<Monitor> monitor);
 		void removeMonitor(std::shared_ptr<Monitor> monitor);

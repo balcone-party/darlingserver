@@ -279,6 +279,7 @@ add_library(darlingserver_duct_tape STATIC
 	src/thread.c
 	src/timer.c
 	src/traps.c
+	src/lanes.c
 	src/host.c
 	src/processor.c
 	src/kqchan.c

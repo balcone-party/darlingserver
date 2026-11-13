@@ -671,6 +671,10 @@ struct thread {
 	int                      thread_region_page_shift; /* Page shift that this thread would like to use when */
 	                                                   /* introspecting a task. This is currently being used */
 	                                                   /* by footprint which uses a thread for each task being inspected. */
+#ifdef __DARLING__
+	int                      iosc_lane_take;           /* iosc: this receive takes a lane port's queued message */
+	uint64_t                 iosc_lane_hint;           /* iosc: client address for iosc_lane_hint_t */
+#endif
 };
 
 #define ith_state           saved.receive.state

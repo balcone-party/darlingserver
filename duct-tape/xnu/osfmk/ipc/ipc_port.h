@@ -168,6 +168,13 @@ struct ipc_port {
 	mach_port_rights_t ip_srights;
 	mach_port_rights_t ip_sorights;
 
+#ifdef __DARLING__
+	/* iosc: Mach message lanes (duct-tape/src/lanes.c) */
+	uint32_t        ip_lane;        /* lane index + 1, 0: none */
+	uint32_t        ip_lane_count;  /* messages in the current 1 s window */
+	uint64_t        ip_lane_t0;     /* start of the window */
+#endif
+
 #if     MACH_ASSERT
 #define IP_NSPARES              4
 #define IP_CALLSTACK_MAX        16

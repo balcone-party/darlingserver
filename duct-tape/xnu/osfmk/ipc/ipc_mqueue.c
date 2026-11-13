@@ -86,6 +86,9 @@
 
 #include <ipc/port.h>
 #include <ipc/ipc_mqueue.h>
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/lanes.h>
+#endif
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_pset.h>
@@ -528,6 +531,13 @@ ipc_mqueue_send(
 	mach_msg_timeout_t  send_timeout)
 {
 	int wresult;
+#ifdef __DARLING__
+	uint32_t lane_gen = 0, lane = 0;
+	if (!imq_is_set(mqueue)) {
+		iosc_lane_note_send(mqueue);
+		lane = iosc_lane_of(ip_from_mq(mqueue), &lane_gen);
+	}
+#endif
 
 	/*
 	 *  Don't block if:
@@ -625,6 +635,16 @@ ipc_mqueue_send(
 		}
 	}
 
+#ifdef __DARLING__
+	if (lane) {
+		ipc_port_t lane_port = ip_from_mq(mqueue);
+		ip_reference(lane_port);
+		ipc_mqueue_post(mqueue, kmsg, option);
+		iosc_lane_after_post(lane_port, lane, lane_gen);
+		ip_release(lane_port);
+		return MACH_MSG_SUCCESS;
+	}
+#endif
 	ipc_mqueue_post(mqueue, kmsg, option);
 	return MACH_MSG_SUCCESS;
 }

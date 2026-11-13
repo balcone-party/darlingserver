@@ -24,6 +24,7 @@ struct dtape_task {
 	dtape_mutex_t dyld_info_lock;
 	dtape_condvar_t dyld_info_condvar;
 	struct proc_ident p_ident;
+	uint32_t lane_proc;  // iosc: index + 1 in the lanes process table, 0: none
 	struct task xnu_task;
 };
 

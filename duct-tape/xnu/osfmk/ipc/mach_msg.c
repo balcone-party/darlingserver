@@ -98,6 +98,10 @@
 #include <ipc/ipc_types.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_mqueue.h>
+#ifdef __DARLING__
+#include <darlingserver/lanes.h>
+#include <darlingserver/duct-tape/lanes.h>
+#endif
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_notify.h>
 #include <ipc/ipc_port.h>
@@ -330,6 +334,12 @@ mach_msg_receive_results(
 	 * get the thread's turnstile, if the thread donated it's turnstile to the port
 	 */
 	mach_msg_receive_results_complete(object);
+#ifdef __DARLING__
+	/* iosc: sent away from a port that just got a lane */
+	if (mr == MACH_RCV_PORT_CHANGED && io_otype(object) == IOT_PORT && ip_object_to_port(object)->ip_lane) {
+		mr = IOSC_RCV_IN_LANE;
+	}
+#endif
 	io_release(object);
 
 	if (mr != MACH_MSG_SUCCESS) {
@@ -548,6 +558,10 @@ mach_msg_overwrite_trap(
 		    0, 0,
 		    0);
 
+#ifdef __DARLING__
+		mach_port_name_t lane_name = CAST_MACH_PORT_TO_NAME(kmsg->ikm_header->msgh_remote_port);
+		ipc_port_t lane_port = IP_NULL;
+#endif
 		mr = ipc_kmsg_copyin(kmsg, space, map, priority, &option);
 
 		if (mr != MACH_MSG_SUCCESS) {
@@ -556,7 +570,21 @@ mach_msg_overwrite_trap(
 			goto end;
 		}
 
+#ifdef __DARLING__
+		if (current_thread()->iosc_lane_hint && IP_VALID(kmsg->ikm_header->msgh_remote_port)) {
+			lane_port = kmsg->ikm_header->msgh_remote_port;
+			ip_reference(lane_port);
+		}
+#endif
 		mr = ipc_kmsg_send(kmsg, option, msg_timeout);
+#ifdef __DARLING__
+		if (lane_port != IP_NULL) {
+			if (mr == MACH_MSG_SUCCESS) {
+				iosc_lane_hint_sent(lane_name, lane_port);
+			}
+			ip_release(lane_port);
+		}
+#endif
 
 		if (mr != MACH_MSG_SUCCESS) {
 			mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
@@ -577,6 +605,17 @@ mach_msg_overwrite_trap(
 			goto end;
 		}
 		/* hold ref for object */
+
+#ifdef __DARLING__
+		/* iosc: the receiver takes this port's messages from its lane */
+		if (self->iosc_lane_take) {
+			self->iosc_lane_take = 0;
+		} else if (io_otype(object) == IOT_PORT && ip_object_to_port(object)->ip_lane) {
+			io_release(object);
+			mr = IOSC_RCV_IN_LANE;
+			goto end;
+		}
+#endif
 
 		if ((option & MACH_RCV_SYNC_WAIT) && !(option & MACH_SEND_SYNC_OVERRIDE)) {
 			ipc_port_t special_reply_port;

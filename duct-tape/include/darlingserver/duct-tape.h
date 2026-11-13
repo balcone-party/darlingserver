@@ -26,6 +26,12 @@ uint32_t dtape_host_self_trap(void);
 uint32_t dtape_thread_self_trap(void);
 uint32_t dtape_mach_reply_port(void);
 void dtape_run_port_ops(uint64_t ops, uint32_t ops_count);
+void dtape_lanes_init(void* base, uint64_t size);
+void dtape_set_lane_hint(uint64_t addr);
+uint32_t dtape_lanes_task_checkin(dtape_task_t* task);
+void dtape_lanes_task_ids(dtape_task_t* task);
+void dtape_lanes_task_gone(dtape_task_t* task);
+int dtape_lane_take(uint64_t msg, uint32_t rcv_size, uint32_t rcv_name, int32_t option);
 uint32_t dtape_thread_get_special_reply_port(void);
 uint32_t dtape_mk_timer_create(void);
 

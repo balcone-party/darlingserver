@@ -28,6 +28,9 @@
 #include <sys/un.h>
 #include <sys/epoll.h>
 #include <poll.h>
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#include <darlingserver/lanes.h>
 #include <fcntl.h>
 #include <system_error>
 #include <thread>
@@ -530,6 +533,24 @@ DarlingServer::Server::Server(std::string prefix):
 		_workQueue.push(nullptr);
 	}
 
+	{
+		const char* env = getenv("IOSC_LANES");
+		if (env && env[0] == '1') {
+			uint64_t size = iosc_lanes_size();
+			int fd = memfd_create("iosc-lanes", MFD_CLOEXEC);
+			if (fd < 0 || ftruncate(fd, size) < 0) {
+				throw std::system_error(errno, std::generic_category(), "Failed to create the lanes region");
+			}
+			void* base = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+			if (base == MAP_FAILED) {
+				throw std::system_error(errno, std::generic_category(), "Failed to map the lanes region");
+			}
+			_lanesFD = fd;
+			_lanesSize = size;
+			_lanesBase = base;
+		}
+	}
+
 	_timerFD = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
 	if (_timerFD < 0) {
 		throw std::system_error(errno, std::generic_category(), "Failed to create timer descriptor");
@@ -554,6 +575,10 @@ void DarlingServer::Server::start() {
 	Thread::interruptDisable();
 	dtape_init(&DTapeHooks::dtape_hooks);
 	Thread::interruptEnable();
+
+	if (_lanesBase) {
+		dtape_lanes_init(_lanesBase, _lanesSize);
+	}
 
 	// force the kernel process to be created now
 	Process::kernelProcess();
@@ -720,6 +745,16 @@ DarlingServer::Server& DarlingServer::Server::sharedInstance() {
 std::string DarlingServer::Server::prefix() const {
 	return _prefix;
 };
+
+int DarlingServer::Server::lanesRegion(uint64_t* size) const {
+	*size = _lanesSize;
+	return _lanesFD;
+};
+
+// lanes.c wakes receivers waiting on a lane's futex word in the shared region
+extern "C" void iosc_futex_wake(uint32_t* addr, int count) {
+	syscall(SYS_futex, addr, FUTEX_WAKE, count, nullptr, nullptr, 0);
+}
 
 void DarlingServer::Server::_worker(std::shared_ptr<Thread> thread) {
 	if (thread) {

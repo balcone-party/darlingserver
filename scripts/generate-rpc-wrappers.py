@@ -365,6 +365,21 @@ calls = [
 	# iosc: no body: carries the caller's deferred port operations (header) when it is about to block
 	('port_ops', [], []),
 
+	# iosc: map the server's lanes region (lanes.h); index: the process's entry in its table
+	('lanes_checkin', [], [
+		('region', '@fd'),
+		('size', 'uint64_t'),
+		('index', 'uint32_t'),
+	]),
+
+	# iosc: take the queued message of a lane port whose SERVER entry the caller popped
+	('lane_take', [
+		('msg', 'void*', 'uint64_t'),
+		('rcv_size', 'uint32_t'),
+		('rcv_name', 'uint32_t'),
+		('option', 'int32_t'),
+	], [], XNU_TRAP_CALL | XNU_TRAP_NO_DTAPE_DEF),
+
 	('mach_port_deallocate', [
 		('target', 'uint32_t'),
 		('name', 'uint32_t'),
@@ -852,6 +867,8 @@ typedef struct dserver_rpc_callhdr {
 	uint64_t ops;
 	uint32_t ops_count;
 	uint32_t ops_reserved;
+	// iosc: where the server writes iosc_lane_hint_t after a send to a lane port (0: nowhere)
+	uint64_t lane_hint;
 } dserver_rpc_callhdr_t;
 
 typedef struct dserver_rpc_replyhdr {
@@ -1381,6 +1398,7 @@ for call in calls:
 				.number = dserver_callnum_{0},
 				.ops = dserver_rpc_hooks_ops(dserver_callnum_{0}),
 				.ops_count = dserver_rpc_hooks_take_ops(dserver_callnum_{0}),
+				.lane_hint = dserver_rpc_hooks_lane_hint(dserver_callnum_{0}),
 			}},
 		"""), '\t').format(call_name))
 

@@ -85,6 +85,9 @@
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_port.h>
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/lanes.h>
+#endif
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_mqueue.h>
@@ -582,6 +585,12 @@ ipc_port_clear_receiver(
 {
 	ipc_mqueue_t    mqueue = &port->ip_messages;
 	boolean_t       reap_messages = FALSE;
+
+#ifdef __DARLING__
+	if (port->ip_lane) {
+		iosc_lane_close(port, should_destroy);
+	}
+#endif
 
 	/*
 	 * Pull ourselves out of any sets to which we belong.

@@ -1851,6 +1851,14 @@ waitq_empty(struct waitq *wq)
 	}
 }
 
+#ifdef __DARLING__
+bool
+iosc_waitq_empty(struct waitq *wq)
+{
+	return waitq_empty(wq);
+}
+#endif
+
 static struct waitq *
 waitq_get_safeq(struct waitq *waitq)
 {

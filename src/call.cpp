@@ -37,11 +37,16 @@ DarlingServer::Log DarlingServer::Call::rpcReplyLog("replies");
 static uint64_t traceAddr(const DarlingServer::Address& a);
 
 std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Message&& requestMessage) {
-	if (requestMessage.data().size() < sizeof(dserver_rpc_callhdr_t)) {
+	// S2C replies are built by the client by hand and carry only the leading fields (no deferred
+	// port operations or lane hint)
+	if (requestMessage.data().size() < offsetof(dserver_rpc_callhdr_t, ops)) {
 		throw std::invalid_argument("Message buffer was too small for call header");
 	}
 
 	dserver_rpc_callhdr_t* header = reinterpret_cast<dserver_rpc_callhdr_t*>(requestMessage.data().data());
+	if (header->number != dserver_callnum_s2c && requestMessage.data().size() < sizeof(dserver_rpc_callhdr_t)) {
+		throw std::invalid_argument("Message buffer was too small for call header");
+	}
 	CallTrace::add('R', header->pid, header->tid, header->number, traceAddr(requestMessage.address()));
 	std::shared_ptr<Call> result = nullptr;
 	std::shared_ptr<Process> process = nullptr;
@@ -265,11 +270,37 @@ DarlingServer::Call::Call(std::shared_ptr<Thread> thread, Address replyAddress, 
 DarlingServer::Call::~Call() {};
 
 void DarlingServer::Call::runCarriedPortOps() {
+	dtape_set_lane_hint(_header.lane_hint);
 	if (_header.ops_count) {
 		uint32_t count = _header.ops_count;
 		_header.ops_count = 0;  // an interrupted call is processed again
 		dtape_run_port_ops(_header.ops, count);
 	}
+};
+
+void DarlingServer::Call::LanesCheckin::processCall() {
+	int code = 0;
+	int fd = -1;
+	uint64_t size = 0;
+	uint32_t index = UINT32_MAX;
+
+	if (auto thread = _thread.lock()) {
+		if (auto process = thread->process()) {
+			int region = Server::sharedInstance().lanesRegion(&size);
+			index = region >= 0 ? dtape_lanes_task_checkin(process->_dtapeTask) : UINT32_MAX;
+			if (index == UINT32_MAX) {
+				code = -ENOSPC;
+			} else if ((fd = dup(region)) < 0) {
+				code = -errno;
+			}
+		} else {
+			code = -ESRCH;
+		}
+	} else {
+		code = -ESRCH;
+	}
+
+	_sendReply(code, fd, size, index);
 };
 
 void DarlingServer::Call::PortOps::processCall() {
@@ -601,6 +632,7 @@ void DarlingServer::Call::Uidgid::processCall() {
 			// HACK
 			// we shouldn't need to access _dtapeTask; Process should provide a method for this (but it doesn't yet because i'm not sure how to make that API feel at-home in C++)
 			dtape_task_uidgid(process->_dtapeTask, _body.new_uid, _body.new_gid, &uid, &gid);
+			dtape_lanes_task_ids(process->_dtapeTask);
 		} else {
 			code = -ESRCH;
 		}

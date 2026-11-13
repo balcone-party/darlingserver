@@ -67,6 +67,7 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 
 	task->context = context;
 	task->saved_pid = nsid;
+	task->lane_proc = 0;
 	task->architecture = architecture;
 	task->has_sigexc = false;
 	task->dyld_info_addr = 0;
@@ -142,6 +143,8 @@ dtape_task_t* dtape_task_create(dtape_task_t* parent_task, uint32_t nsid, void* 
 
 void dtape_task_destroy(dtape_task_t* task) {
 	dtape_log_debug("%d: task being destroyed", task->saved_pid);
+
+	dtape_lanes_task_gone(task);
 
 	dtape_psynch_task_destroy(task);
 
