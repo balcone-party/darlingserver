@@ -264,6 +264,18 @@ DarlingServer::Call::Call(std::shared_ptr<Thread> thread, Address replyAddress, 
 
 DarlingServer::Call::~Call() {};
 
+void DarlingServer::Call::runCarriedPortOps() {
+	if (_header.ops_count) {
+		uint32_t count = _header.ops_count;
+		_header.ops_count = 0;  // an interrupted call is processed again
+		dtape_run_port_ops(_header.ops, count);
+	}
+};
+
+void DarlingServer::Call::PortOps::processCall() {
+	_sendReply(0);
+};
+
 std::shared_ptr<DarlingServer::Thread> DarlingServer::Call::thread() const {
 	return _thread.lock();
 };

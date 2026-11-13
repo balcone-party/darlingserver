@@ -25,6 +25,7 @@ uint32_t dtape_task_self_trap(void);
 uint32_t dtape_host_self_trap(void);
 uint32_t dtape_thread_self_trap(void);
 uint32_t dtape_mach_reply_port(void);
+void dtape_run_port_ops(uint64_t ops, uint32_t ops_count);
 uint32_t dtape_thread_get_special_reply_port(void);
 uint32_t dtape_mk_timer_create(void);
 

@@ -9,6 +9,29 @@ extern "C" {
 #endif
 
 //
+// iosc: deferred port operations (dserver_rpc_callhdr_t.ops)
+//
+// Operations on the caller's own space whose result the caller cannot observe before its next
+// call: the client answers KERN_SUCCESS at once and the server runs them in order in front of
+// that call. A failure is only logged.
+
+enum iosc_port_op_kind {
+	iosc_port_op_deallocate = 1,     // name
+	iosc_port_op_mod_refs = 2,       // name, right, delta
+	iosc_port_op_insert_member = 3,  // name, pset
+	iosc_port_op_extract_member = 4, // name, pset
+};
+
+typedef struct iosc_port_op {
+	uint32_t kind;
+	uint32_t name;
+	uint32_t arg;    // right (mod_refs) or pset
+	int32_t delta;
+} iosc_port_op_t;
+
+#define IOSC_PORT_OPS_MAX 32
+
+//
 // kqueue channels
 //
 

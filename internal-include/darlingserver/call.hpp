@@ -65,6 +65,9 @@ namespace DarlingServer {
 
 		virtual void processCall() = 0;
 
+		// iosc: deferred port operations carried in the header, run once before processCall()
+		void runCarriedPortOps();
+
 		virtual void sendBasicReply(int resultCode);
 		// FIXME: this should actually be in a "BSD" subclass with BSD traps inheriting from it
 		virtual void sendBSDReply(int resultCode, uint32_t returnValue);

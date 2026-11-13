@@ -362,6 +362,9 @@ calls = [
 		('rcv_msg', 'void*', 'uint64_t'),
 	], [], XNU_TRAP_CALL | XNU_TRAP_NOPREFIX | ALLOW_INTERRUPTIONS),
 
+	# iosc: no body: carries the caller's deferred port operations (header) when it is about to block
+	('port_ops', [], []),
+
 	('mach_port_deallocate', [
 		('target', 'uint32_t'),
 		('name', 'uint32_t'),
@@ -844,6 +847,11 @@ typedef struct dserver_rpc_callhdr {
 	pid_t pid;
 	pid_t tid;
 	dserver_rpc_architecture_t architecture;
+	// iosc: the caller's deferred port operations (iosc_port_op_t[], rpc-supplement.h), run by the
+	// server in front of this call
+	uint64_t ops;
+	uint32_t ops_count;
+	uint32_t ops_reserved;
 } dserver_rpc_callhdr_t;
 
 typedef struct dserver_rpc_replyhdr {
@@ -1371,6 +1379,8 @@ for call in calls:
 				.pid = dserver_rpc_hooks_get_pid(),
 				.tid = dserver_rpc_hooks_get_tid(),
 				.number = dserver_callnum_{0},
+				.ops = dserver_rpc_hooks_ops(dserver_callnum_{0}),
+				.ops_count = dserver_rpc_hooks_take_ops(dserver_callnum_{0}),
 			}},
 		"""), '\t').format(call_name))
 

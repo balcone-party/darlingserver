@@ -412,6 +412,7 @@ void DarlingServer::Thread::microthreadWorker() {
 
 	currentContinuation = nullptr;
 	currentThreadVar->makePendingCallActive();
+	currentThreadVar->_activeCall->runCarriedPortOps();
 	currentThreadVar->_activeCall->processCall();
 
 	if (currentThreadVar->_handlingInterruptedCall) {
