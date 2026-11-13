@@ -35,6 +35,7 @@ static uint64_t region_size;
 static iosc_lanes_header_t* hdr;
 static iosc_lanes_proc_t* procs;
 static iosc_lane_t* lanes;
+static iosc_lane_token_t* tokens;
 
 bool iosc_lanes_enabled(void) {
 	return region != NULL;
@@ -55,11 +56,14 @@ void dtape_lanes_init(void* base, uint64_t size) {
 	hdr->lanes = IOSC_LANES_COUNT;
 	hdr->ring = IOSC_LANES_RING;
 	hdr->entry = IOSC_LANES_ENTRY;
-	hdr->procs_off = 4096;
-	hdr->lanes_off = hdr->procs_off + (uint64_t)IOSC_LANES_PROCS * sizeof(iosc_lanes_proc_t);
-	hdr->rings_off = hdr->lanes_off + (uint64_t)IOSC_LANES_COUNT * sizeof(iosc_lane_t);
+	hdr->procs_off = IOSC_LANES_PROCS_OFF;
+	hdr->lanes_off = IOSC_LANES_LANES_OFF;
+	hdr->tokens = IOSC_LANES_TOKENS;
+	hdr->tokens_off = IOSC_LANES_TOKENS_OFF;
+	hdr->rings_off = IOSC_LANES_RINGS_OFF;
 	procs = (iosc_lanes_proc_t*)(region + hdr->procs_off);
 	lanes = (iosc_lane_t*)(region + hdr->lanes_off);
+	tokens = (iosc_lane_token_t*)(region + hdr->tokens_off);
 	for (uint32_t i = 0; i < IOSC_LANES_COUNT; i++) {
 		lanes[i].ring_off = hdr->rings_off + (uint64_t)i * IOSC_LANES_RING * IOSC_LANES_ENTRY;
 	}
@@ -101,6 +105,12 @@ void dtape_lanes_task_ids(dtape_task_t* task) {
 void dtape_lanes_task_gone(dtape_task_t* task) {
 	if (region && task->lane_proc && task->lane_proc <= IOSC_LANES_PROCS) {
 		iosc_lanes_proc_t* p = &procs[task->lane_proc - 1];
+		uint32_t me = task->lane_proc - 1;
+		for (uint32_t i = 0; i < IOSC_LANES_TOKENS; i++) {
+			if (tokens[i].state != iosc_token_unused && (tokens[i].receiver == me || tokens[i].client == me)) {
+				__atomic_store_n(&tokens[i].state, iosc_token_dead, __ATOMIC_RELEASE);
+			}
+		}
 		p->alive = 0;
 		__atomic_store_n(&p->pid, 0, __ATOMIC_RELEASE);
 		task->lane_proc = 0;
@@ -128,6 +138,8 @@ static void lane_wake_all(iosc_lane_t* l) {
 	iosc_futex_wake(&l->ready, INT32_MAX);
 }
 
+static uint32_t lane_open(ipc_port_t port, ipc_mqueue_t mqueue);
+
 // Under the mqueue lock, before a message is queued to the port: count, and open a lane when the
 // port is hot, has no queued messages and is plain (no set, no knote, a guest receiver).
 // Receivers waiting in the server are sent away (MACH_RCV_PORT_CHANGED, which their receive
@@ -153,9 +165,14 @@ void iosc_lane_note_send(ipc_mqueue_t mqueue) {
 	    !ipc_kmsg_queue_empty(&mqueue->imq_messages)) {
 		return;
 	}
+	lane_open(port, mqueue);
+};
+
+// mqueue locked; the port is plain (checked by the caller). Returns the lane index + 1 or 0.
+static uint32_t lane_open(ipc_port_t port, ipc_mqueue_t mqueue) {
 	uint32_t owner = task_lane_proc(port->ip_receiver);
 	if (!owner) {
-		return;
+		return 0;
 	}
 	for (uint32_t i = 0; i < IOSC_LANES_COUNT; i++) {
 		iosc_lane_t* l = &lanes[i];
@@ -178,9 +195,10 @@ void iosc_lane_note_send(ipc_mqueue_t mqueue) {
 			    WAITQ_ALL_PRIORITIES, WAITQ_KEEP_LOCKED);
 		}
 		dtape_log_debug("lanes: port %p (name %#x, proc %u) -> lane %u", port, port->ip_receiver_name, owner - 1, i);
-		return;
+		return i + 1;
 	}
-};
+	return 0;
+}
 
 // After a message was queued to a lane port through the server: its SERVER entry. A full ring
 // waits as a full queue would.
@@ -216,8 +234,58 @@ void dtape_set_lane_hint(uint64_t addr) {
 	current_thread()->iosc_lane_hint = addr;
 };
 
-// After a send through the server to a lane port: tell the sender (lanes.h, iosc_lane_hint_t).
-void iosc_lane_hint_sent(mach_port_name_t name, ipc_port_t port) {
+static bool port_plain(ipc_port_t port) {
+	return ip_active(port) && !port->ip_specialreply && ip_kotype(port) == IKOT_NONE && !port->ip_in_pset &&
+	    port->ip_receiver_name && SLIST_EMPTY(&port->ip_messages.imq_klist);
+}
+
+// Real send-once rights to the client's reply port in the receiver's space, published as FREE
+// tokens; the pool for (reply port, receiver) is topped up to IOSC_LANES_POOL.
+static void make_tokens(ipc_port_t reply, uint32_t reply_name, uint32_t reply_lane, uint32_t client,
+    ipc_space_t rspace, uint32_t receiver, uint32_t out[IOSC_LANES_POOL]) {
+	uint32_t n = 0;
+	uint32_t lane_gen = lanes[reply_lane - 1].gen;
+	for (uint32_t i = 0; i < IOSC_LANES_TOKENS && n < IOSC_LANES_POOL; i++) {
+		iosc_lane_token_t* t = &tokens[i];
+		uint32_t st = __atomic_load_n(&t->state, __ATOMIC_ACQUIRE);
+		if ((st == iosc_token_free || st == iosc_token_in_flight) && t->client == client &&
+		    t->client_name == reply_name && t->receiver == receiver && t->lane == reply_lane && t->lane_gen == lane_gen) {
+			out[n++] = i + 1;
+		}
+	}
+	thread_t self = current_thread();
+	struct knote* kn = self->ith_knote;
+	self->ith_knote = ITH_KNOTE_NULL;
+	for (uint32_t i = 0; i < IOSC_LANES_TOKENS && n < IOSC_LANES_POOL; i++) {
+		iosc_lane_token_t* t = &tokens[i];
+		uint32_t st = __atomic_load_n(&t->state, __ATOMIC_ACQUIRE);
+		if (st != iosc_token_unused && st != iosc_token_dead) {
+			continue;
+		}
+		ipc_port_t so = ipc_port_make_sonce(reply);
+		mach_port_name_t name = MACH_PORT_NULL;
+		if (!IP_VALID(so) || ipc_object_copyout(rspace, ip_to_object(so), MACH_MSG_TYPE_PORT_SEND_ONCE,
+		    IPC_OBJECT_COPYOUT_FLAGS_NONE, NULL, NULL, &name) != KERN_SUCCESS) {
+			if (IP_VALID(so)) {
+				ipc_port_release_sonce(so);
+			}
+			break;
+		}
+		t->client = client;
+		t->client_name = reply_name;
+		t->receiver = receiver;
+		t->name = name;
+		t->lane = reply_lane;
+		t->lane_gen = lane_gen;
+		__atomic_store_n(&t->state, iosc_token_free, __ATOMIC_RELEASE);
+		out[n++] = i + 1;
+	}
+	self->ith_knote = kn;
+}
+
+// After a send through the server to a lane port: tell the sender where the lane is and, when
+// the reply port is the sender's own plain port, give it a lane and reply tokens in the receiver.
+void iosc_lane_hint_sent(mach_port_name_t name, ipc_port_t port, ipc_port_t reply, mach_port_name_t reply_name) {
 	thread_t self = current_thread();
 	uint64_t addr = self->iosc_lane_hint;
 	uint32_t gen;
@@ -225,9 +293,39 @@ void iosc_lane_hint_sent(mach_port_name_t name, ipc_port_t port) {
 	if (!addr || !lane || !name) {
 		return;
 	}
-	iosc_lane_hint_t h = { .name = name, .lane = lane, .gen = gen };
-	copyout(&h, addr, sizeof(h));
 	self->iosc_lane_hint = 0;
+	iosc_lane_hint_t h = { .name = name, .lane = lane, .gen = gen };
+	uint32_t client = task_lane_proc(current_space());
+	if (IP_VALID(reply) && reply_name && client) {
+		ip_lock(reply);
+		uint32_t rlane = 0;
+		if (port_plain(reply) && reply->ip_receiver == current_space() && reply->ip_receiver_name == reply_name) {
+			rlane = reply->ip_lane;
+			if (!rlane) {
+				imq_lock(&reply->ip_messages);
+				if (ipc_kmsg_queue_empty(&reply->ip_messages.imq_messages)) {
+					rlane = lane_open(reply, &reply->ip_messages);
+				}
+				imq_unlock(&reply->ip_messages);
+			}
+		}
+		ip_unlock(reply);
+		ip_lock(port);
+		ipc_space_t rspace = ip_active(port) ? port->ip_receiver : NULL;
+		uint32_t receiver = task_lane_proc(rspace);
+		if (rspace) {
+			is_reference(rspace);
+		}
+		ip_unlock(port);
+		if (rlane && receiver) {
+			make_tokens(reply, reply_name, rlane, client - 1, rspace, receiver - 1, h.tokens);
+			h.reply = reply_name;
+		}
+		if (rspace) {
+			is_release(rspace);
+		}
+	}
+	copyout(&h, addr, sizeof(h));
 };
 
 uint32_t iosc_lane_of(ipc_port_t port, uint32_t* gen) {
@@ -350,6 +448,12 @@ void iosc_lane_close(ipc_port_t port, bool drop) {
 		imq_unlock(mq);
 	}
 
+	uint32_t lane = port->ip_lane;
+	for (uint32_t i = 0; i < IOSC_LANES_TOKENS; i++) {
+		if (tokens[i].lane == lane && tokens[i].state != iosc_token_unused) {
+			__atomic_store_n(&tokens[i].state, iosc_token_dead, __ATOMIC_RELEASE);
+		}
+	}
 	port->ip_lane = 0;
 	__atomic_add_fetch(&l->gen, 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&l->state, iosc_lane_free, __ATOMIC_RELEASE);

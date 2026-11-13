@@ -15,7 +15,7 @@ void iosc_lane_note_send(struct ipc_mqueue* mqueue);
 uint32_t iosc_lane_of(struct ipc_port* port, uint32_t* gen);
 void iosc_lane_after_post(struct ipc_port* port, uint32_t lane, uint32_t gen);
 void iosc_lane_close(struct ipc_port* port, bool drop);
-void iosc_lane_hint_sent(uint32_t name, struct ipc_port* port);
+void iosc_lane_hint_sent(uint32_t name, struct ipc_port* port, struct ipc_port* reply, uint32_t reply_name);
 bool iosc_waitq_empty(struct waitq* wq);
 
 #endif // _DARLINGSERVER_DUCT_TAPE_LANES_H_

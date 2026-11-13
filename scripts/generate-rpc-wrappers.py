@@ -366,7 +366,9 @@ calls = [
 	('port_ops', [], []),
 
 	# iosc: map the server's lanes region (lanes.h); index: the process's entry in its table
-	('lanes_checkin', [], [
+	('lanes_checkin', [
+		('version', 'uint32_t'),  # IOSC_LANES_VERSION the client was built with
+	], [
 		('region', '@fd'),
 		('size', 'uint64_t'),
 		('index', 'uint32_t'),

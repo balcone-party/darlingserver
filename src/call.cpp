@@ -25,6 +25,7 @@
 
 #include <darlingserver/logging.hpp>
 #include <darlingserver/duct-tape.h>
+#include <darlingserver/lanes.h>
 #include <darlingserver/config.hpp>
 #include <sys/fcntl.h>
 #include <sys/syscall.h>
@@ -287,7 +288,8 @@ void DarlingServer::Call::LanesCheckin::processCall() {
 	if (auto thread = _thread.lock()) {
 		if (auto process = thread->process()) {
 			int region = Server::sharedInstance().lanesRegion(&size);
-			index = region >= 0 ? dtape_lanes_task_checkin(process->_dtapeTask) : UINT32_MAX;
+			// a client built for another layout must not get lanes: its receives could not follow them
+			index = region >= 0 && _body.version == IOSC_LANES_VERSION ? dtape_lanes_task_checkin(process->_dtapeTask) : UINT32_MAX;
 			if (index == UINT32_MAX) {
 				code = -ENOSPC;
 			} else if ((fd = dup(region)) < 0) {

@@ -560,7 +560,10 @@ mach_msg_overwrite_trap(
 
 #ifdef __DARLING__
 		mach_port_name_t lane_name = CAST_MACH_PORT_TO_NAME(kmsg->ikm_header->msgh_remote_port);
-		ipc_port_t lane_port = IP_NULL;
+		mach_port_name_t lane_reply_name =
+		    MACH_MSGH_BITS_LOCAL(kmsg->ikm_header->msgh_bits) == MACH_MSG_TYPE_MAKE_SEND_ONCE ?
+		    CAST_MACH_PORT_TO_NAME(kmsg->ikm_header->msgh_local_port) : MACH_PORT_NULL;
+		ipc_port_t lane_port = IP_NULL, lane_reply = IP_NULL;
 #endif
 		mr = ipc_kmsg_copyin(kmsg, space, map, priority, &option);
 
@@ -574,15 +577,22 @@ mach_msg_overwrite_trap(
 		if (current_thread()->iosc_lane_hint && IP_VALID(kmsg->ikm_header->msgh_remote_port)) {
 			lane_port = kmsg->ikm_header->msgh_remote_port;
 			ip_reference(lane_port);
+			if (lane_reply_name && IP_VALID(kmsg->ikm_header->msgh_local_port)) {
+				lane_reply = kmsg->ikm_header->msgh_local_port;
+				ip_reference(lane_reply);
+			}
 		}
 #endif
 		mr = ipc_kmsg_send(kmsg, option, msg_timeout);
 #ifdef __DARLING__
 		if (lane_port != IP_NULL) {
 			if (mr == MACH_MSG_SUCCESS) {
-				iosc_lane_hint_sent(lane_name, lane_port);
+				iosc_lane_hint_sent(lane_name, lane_port, lane_reply, lane_reply_name);
 			}
 			ip_release(lane_port);
+			if (lane_reply != IP_NULL) {
+				ip_release(lane_reply);
+			}
 		}
 #endif
 

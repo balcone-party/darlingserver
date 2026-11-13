@@ -16,7 +16,7 @@
 #include <stdint.h>
 
 #define IOSC_LANES_MAGIC 0x4c534f49u  // "IOSL"
-#define IOSC_LANES_VERSION 1u
+#define IOSC_LANES_VERSION 2u
 
 #define IOSC_LANES_PROCS 1024u
 #define IOSC_LANES_COUNT 256u
@@ -24,6 +24,8 @@
 #define IOSC_LANES_ENTRY 2048u       // bytes per entry
 #define IOSC_LANES_ENTRY_HDR 64u     // entry header, the message follows
 #define IOSC_LANES_MSG_MAX (IOSC_LANES_ENTRY - IOSC_LANES_ENTRY_HDR)
+#define IOSC_LANES_TOKENS 4096u
+#define IOSC_LANES_POOL 4u            // reply tokens per (client reply port, receiver task)
 
 enum iosc_lane_state {
 	iosc_lane_free = 0,
@@ -48,7 +50,8 @@ typedef struct iosc_lanes_header {
 	uint64_t lanes_off;
 	uint64_t rings_off;
 	uint32_t epoch;          // bumped by the server whenever a lane opens or closes
-	uint32_t reserved[3];
+	uint32_t tokens;
+	uint64_t tokens_off;
 } iosc_lanes_header_t;
 
 typedef struct iosc_lanes_proc {
@@ -74,6 +77,31 @@ typedef struct iosc_lane {
 	uint64_t pad2[7];
 } iosc_lane_t;
 
+// Reply tokens. A request whose reply port is the sender thread's reply port R carries
+// MAKE_SEND_ONCE of R; in the receiver that is a fresh send-once name. The server makes a small
+// pool of real send-once rights to R in the receiver's space; a fast sender puts a FREE token's
+// name in the message (IN_FLIGHT), the receiver's reply to that name with MOVE_SEND_ONCE goes
+// into R's lane and the token is FREE again (the real right is never used). Anything else the
+// receiver does with the name (deallocate, a complex message, a send through the server) marks
+// the token DEAD first; from then on the real right behaves as on XNU.
+enum iosc_token_state {
+	iosc_token_unused = 0,
+	iosc_token_free = 1,
+	iosc_token_in_flight = 2,
+	iosc_token_dead = 3,
+};
+
+typedef struct iosc_lane_token {
+	uint32_t state;          // iosc_token_state
+	uint32_t client;         // process index of R's owner
+	uint32_t client_name;    // R in the client's space
+	uint32_t receiver;       // process index of the task holding the send-once right
+	uint32_t name;           // the right's name in the receiver's space
+	uint32_t lane;           // R's lane index + 1
+	uint32_t lane_gen;
+	uint32_t reserved;
+} iosc_lane_token_t;
+
 typedef struct iosc_lane_entry {
 	uint64_t seq;            // Vyukov bounded queue stamp
 	uint32_t kind;           // iosc_lane_entry_kind
@@ -81,18 +109,21 @@ typedef struct iosc_lane_entry {
 	uint32_t writer;         // process index of the sender
 	uint32_t tid;
 	uint32_t audit[8];       // the sender's audit token (written by the sender)
-	uint32_t reserved[2];
+	uint32_t token;          // reply token index + 1 when the reply port is a token, 0 otherwise
+	uint32_t reserved;
 	// followed by the message: mach_msg_header_t as the receiver sees it, then the body
 } iosc_lane_entry_t;
 
 _Static_assert(sizeof(iosc_lane_entry_t) == IOSC_LANES_ENTRY_HDR, "lane entry header");
 _Static_assert(sizeof(iosc_lane_t) == 192, "lane");
 
+#define IOSC_LANES_PROCS_OFF 4096ull
+#define IOSC_LANES_LANES_OFF (IOSC_LANES_PROCS_OFF + (uint64_t)IOSC_LANES_PROCS * sizeof(iosc_lanes_proc_t))
+#define IOSC_LANES_TOKENS_OFF (IOSC_LANES_LANES_OFF + (uint64_t)IOSC_LANES_COUNT * sizeof(iosc_lane_t))
+#define IOSC_LANES_RINGS_OFF (IOSC_LANES_TOKENS_OFF + (uint64_t)IOSC_LANES_TOKENS * sizeof(iosc_lane_token_t))
+
 static inline uint64_t iosc_lanes_size(void) {
-	uint64_t procs = 4096;
-	uint64_t lanes = procs + (uint64_t)IOSC_LANES_PROCS * sizeof(iosc_lanes_proc_t);
-	uint64_t rings = lanes + (uint64_t)IOSC_LANES_COUNT * sizeof(iosc_lane_t);
-	return rings + (uint64_t)IOSC_LANES_COUNT * IOSC_LANES_RING * IOSC_LANES_ENTRY;
+	return IOSC_LANES_RINGS_OFF + (uint64_t)IOSC_LANES_COUNT * IOSC_LANES_RING * IOSC_LANES_ENTRY;
 }
 
 // Written by the server to dserver_rpc_callhdr_t.lane_hint after a message to a lane port went
@@ -101,7 +132,8 @@ typedef struct iosc_lane_hint {
 	uint32_t name;           // the destination name in the sender's space, 0: no hint
 	uint32_t lane;           // lane index + 1
 	uint32_t gen;
-	uint32_t reserved;
+	uint32_t reply;          // the reply port (R) the tokens are for, 0: none
+	uint32_t tokens[IOSC_LANES_POOL];  // token index + 1
 } iosc_lane_hint_t;
 
 // mach_msg result: the send part (if any) is done, receive from the lane of rcv_name.
