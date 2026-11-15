@@ -40,6 +40,11 @@ static iosc_lane_token_t* tokens;
 static iosc_lane_pset_t* psets;
 static ipc_pset_t pset_obj[IOSC_LANES_PSETS];  // published sets (referenced)
 static ipc_port_t lane_port[IOSC_LANES_COUNT];  // the port of each open lane (not referenced)
+// The published set of each lane (index + 1): the region copy is only for clients, any process
+// of the device can rewrite it.
+static uint32_t lane_pset[IOSC_LANES_COUNT];
+static uint32_t lane_owner[IOSC_LANES_COUNT];
+static uint32_t pset_owner[IOSC_LANES_PSETS], pset_name[IOSC_LANES_PSETS];
 static ipc_port_t token_port[IOSC_LANES_TOKENS];  // each token's reply port (referenced)
 
 bool iosc_lanes_enabled(void) {
@@ -125,7 +130,9 @@ void dtape_lanes_task_gone(dtape_task_t* task) {
 };
 
 static iosc_lane_entry_t* lane_entry(iosc_lane_t* l, uint64_t pos) {
-	return (iosc_lane_entry_t*)(region + l->ring_off + (pos & (IOSC_LANES_RING - 1)) * IOSC_LANES_ENTRY);
+	// from the lane's index, never from ring_off in the region
+	uint64_t i = (uint64_t)(l - lanes) * IOSC_LANES_RING + (pos & (IOSC_LANES_RING - 1));
+	return (iosc_lane_entry_t*)(region + IOSC_LANES_RINGS_OFF + i * IOSC_LANES_ENTRY);
 }
 
 static iosc_lane_t* port_lane(ipc_port_t port) {
@@ -153,7 +160,7 @@ static iosc_lane_pset_t* pset_at(uint32_t s) {
 
 // A knote watches this lane (or its set): wake the owner's lane watcher (client lanes.c).
 static void lane_doorbell(iosc_lane_t* l) {
-	uint32_t s = l->pset;
+	uint32_t s = lane_pset[l - lanes];
 	if (!l->kq && !(s && s <= IOSC_LANES_PSETS && psets[s - 1].kq)) {
 		return;
 	}
@@ -238,6 +245,7 @@ static uint32_t lane_open(ipc_port_t port, ipc_mqueue_t mqueue) {
 		l->head = 0;
 		l->tail = 0;
 		l->owner = owner - 1;
+		lane_owner[i] = owner - 1;
 		l->name = port->ip_receiver_name;
 		__atomic_add_fetch(&l->gen, 1, __ATOMIC_RELEASE);
 		__atomic_store_n(&l->state, iosc_lane_open, __ATOMIC_RELEASE);
@@ -245,6 +253,7 @@ static uint32_t lane_open(ipc_port_t port, ipc_mqueue_t mqueue) {
 		port->ip_lane_tserve = port->ip_lane_tnext;
 		lane_port[i] = port;
 		l->pset = 0;
+		lane_pset[i] = 0;
 		// a port watched by a knote (EVFILT_MACHPORT through kqchan) rings the doorbell
 		l->kq = port->ip_lane_watched;
 		port->ip_lane_t0 = mach_absolute_time();
@@ -318,7 +327,7 @@ void iosc_lane_after_post(ipc_port_t port, uint32_t lane, uint32_t gen, uint32_t
 				if (__atomic_add_fetch(&l->ready, 1, __ATOMIC_SEQ_CST) && __atomic_load_n(&l->waiters, __ATOMIC_SEQ_CST)) {
 					iosc_futex_wake(&l->ready, 1);
 				}
-				pset_wake(l->pset, 1);
+				pset_wake(lane_pset[l - lanes], 1);
 				lane_doorbell(l);
 				port->ip_lane_tserve = ticket + 1;
 				lane_traffic(port, l);
@@ -526,6 +535,7 @@ static void pset_detach(uint32_t s, uint32_t lane) {
 		}
 	}
 	lanes[lane - 1].pset = 0;
+	lane_pset[lane - 1] = 0;
 }
 
 // The port leaves lane mode. drop: the port is being destroyed (its messages go with it);
@@ -559,10 +569,11 @@ void iosc_lane_close(ipc_port_t port, bool drop) {
 			if (!__atomic_compare_exchange_n(&l->head, &pos, pos + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
 				continue;  // a receiver took it
 			}
-			got[n].kind = e->kind;
-			got[n].kmsg = e->kind == iosc_lane_inline ? lane_kmsg(port, e) : IKM_NULL;
-			servers += e->kind == iosc_lane_server;
-			if (e->kind == iosc_lane_server || got[n].kmsg != IKM_NULL) {
+			uint32_t kind = __atomic_load_n(&e->kind, __ATOMIC_RELAXED);  // read once: the region may change under us
+			got[n].kind = kind;
+			got[n].kmsg = kind == iosc_lane_inline ? lane_kmsg(port, e) : IKM_NULL;
+			servers += kind == iosc_lane_server;
+			if (kind == iosc_lane_server || got[n].kmsg != IKM_NULL) {
 				n++;
 			}
 			__atomic_store_n(&e->seq, pos + IOSC_LANES_RING, __ATOMIC_RELEASE);
@@ -602,7 +613,7 @@ void iosc_lane_close(ipc_port_t port, bool drop) {
 	}
 
 	uint32_t lane = port->ip_lane;
-	uint32_t s = l->pset;
+	uint32_t s = lane_pset[lane - 1];
 	if (s) {
 		pset_detach(s, lane);
 		if (!drop && pset_at(s)) {
@@ -651,6 +662,8 @@ static void pset_publish(ipc_pset_t pset, mach_port_name_t name, uint32_t owner)
 		memset(p->lanes, 0, sizeof(p->lanes));
 		p->owner = owner - 1;
 		p->name = name;
+		pset_owner[i] = owner - 1;
+		pset_name[i] = name;
 		p->server_pending = 1;  // members may have queued messages
 		p->kq = !SLIST_EMPTY(&pset->ips_messages.imq_klist);
 		__atomic_add_fetch(&p->gen, 1, __ATOMIC_RELEASE);
@@ -705,6 +718,7 @@ static bool pset_attach(uint32_t s, ipc_port_t port) {
 	for (uint32_t k = 0; k < IOSC_PSET_LANES; k++) {
 		if (!p->lanes[k]) {
 			lanes[port->ip_lane - 1].pset = s;
+			lane_pset[port->ip_lane - 1] = s;
 			__atomic_store_n(&p->lanes[k], port->ip_lane, __ATOMIC_RELEASE);
 			port->ip_lane_pset = s;
 			pset_wake(s, INT32_MAX);
@@ -712,6 +726,71 @@ static bool pset_attach(uint32_t s, ipc_port_t port) {
 		}
 	}
 	return false;
+}
+
+// A receive is sent to the lane (IOSC_RCV_IN_LANE): the client looks the lane (or set) up by state,
+// owner and name in the region. Put back what a process of the device may have overwritten, or
+// the receive would bounce between the server and the region for good.
+static void put32(uint32_t* w, uint32_t v) {
+	if (__atomic_load_n(w, __ATOMIC_RELAXED) != v) {
+		__atomic_store_n(w, v, __ATOMIC_RELEASE);
+	}
+}
+
+static void lane_restore(uint32_t i) {
+	ipc_port_t port = lane_port[i];
+	if (!port) {
+		return;
+	}
+	// another slot claiming the same owner and name would be found first
+	for (uint32_t k = 0; k < IOSC_LANES_COUNT; k++) {
+		if (k != i && lane_port[k] != port && lanes[k].owner == lane_owner[i] && lanes[k].name == port->ip_receiver_name &&
+		    __atomic_load_n(&lanes[k].state, __ATOMIC_RELAXED) == iosc_lane_open) {
+			put32(&lanes[k].state, lane_port[k] ? iosc_lane_open : iosc_lane_free);
+			if (lane_port[k]) {
+				put32(&lanes[k].owner, lane_owner[k]);
+				put32(&lanes[k].name, lane_port[k]->ip_receiver_name);
+			}
+		}
+	}
+	iosc_lane_t* l = &lanes[i];
+	put32(&l->owner, lane_owner[i]);
+	put32(&l->name, port->ip_receiver_name);
+	put32(&l->pset, lane_pset[i]);
+	put32(&l->state, iosc_lane_open);
+}
+
+void iosc_lane_restore_port(ipc_port_t port) {
+	uint32_t i = port->ip_lane;
+	if (region && i && i <= IOSC_LANES_COUNT && lane_port[i - 1] == port) {
+		lane_restore(i - 1);
+	}
+}
+
+void iosc_lane_restore_pset(ipc_pset_t pset) {
+	uint32_t s = pset->ips_lane;
+	if (!region || !s || s > IOSC_LANES_PSETS || pset_obj[s - 1] != pset) {
+		return;
+	}
+	iosc_lane_pset_t* p = &psets[s - 1];
+	for (uint32_t k = 0; k < IOSC_LANES_PSETS; k++) {
+		if (k != s - 1 && !pset_obj[k] && psets[k].owner == pset_owner[s - 1] && psets[k].name == pset_name[s - 1]) {
+			put32(&psets[k].state, iosc_lane_free);
+		}
+	}
+	put32(&p->owner, pset_owner[s - 1]);
+	put32(&p->name, pset_name[s - 1]);
+	uint32_t k = 0;
+	for (uint32_t i = 0; i < IOSC_LANES_COUNT && k < IOSC_PSET_LANES; i++) {
+		if (lane_pset[i] == s && lane_port[i]) {
+			lane_restore(i);
+			put32(&p->lanes[k++], i + 1);
+		}
+	}
+	while (k < IOSC_PSET_LANES) {
+		put32(&p->lanes[k++], 0);
+	}
+	put32(&p->state, iosc_lane_open);
 }
 
 void iosc_lane_pset_name(mach_port_name_t name) {
@@ -733,7 +812,7 @@ bool iosc_lane_pset_add(ipc_pset_t pset, ipc_port_t port) {
 	// only a port in no other set can be a lane member: a lane member is unlinked from its set, and
 	// a second set would have to see its messages too (CFRunLoop puts its wakeup port into the set
 	// of every mode)
-	bool first = !port->ip_in_pset && !(port->ip_lane && lanes[port->ip_lane - 1].pset);
+	bool first = !port->ip_in_pset && !(port->ip_lane && lane_pset[port->ip_lane - 1]);
 	if (port->ip_lane) {
 		if (first && pset->ips_lane && pset_attach(pset->ips_lane, port)) {
 			return true;
@@ -751,7 +830,7 @@ bool iosc_lane_pset_remove(ipc_pset_t pset, ipc_port_t port) {
 		return false;
 	}
 	port->ip_lane_pset = 0;
-	if (port->ip_lane && lanes[port->ip_lane - 1].pset == s) {
+	if (port->ip_lane && lane_pset[port->ip_lane - 1] == s) {
 		pset_detach(s, port->ip_lane);
 		return true;
 	}
@@ -762,7 +841,7 @@ bool iosc_lane_pset_remove(ipc_pset_t pset, ipc_port_t port) {
 bool iosc_lane_pset_remove_all(ipc_port_t port) {
 	uint32_t s = port->ip_lane_pset;
 	port->ip_lane_pset = 0;
-	if (s && port->ip_lane && lanes[port->ip_lane - 1].pset == s) {
+	if (s && port->ip_lane && lane_pset[port->ip_lane - 1] == s) {
 		pset_detach(s, port->ip_lane);
 		return true;
 	}

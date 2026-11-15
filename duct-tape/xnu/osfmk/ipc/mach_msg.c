@@ -120,6 +120,18 @@
 #define offsetof(type, member)  ((size_t)(&((type *)0)->member))
 #endif /* offsetof */
 
+#ifdef __DARLING__
+static void
+iosc_lane_restore_object(ipc_object_t object)
+{
+	if (io_otype(object) == IOT_PORT) {
+		iosc_lane_restore_port(ip_object_to_port(object));
+	} else {
+		iosc_lane_restore_pset(ips_object_to_pset(object));
+	}
+}
+#endif
+
 /*
  * Forward declarations - kernel internal routines
  */
@@ -339,6 +351,7 @@ mach_msg_receive_results(
 	if (mr == MACH_RCV_PORT_CHANGED && ((io_otype(object) == IOT_PORT && ip_object_to_port(object)->ip_lane) ||
 	    (io_otype(object) == IOT_PORT_SET && ips_object_to_pset(object)->ips_lane))) {
 		mr = IOSC_RCV_IN_LANE;
+		iosc_lane_restore_object(object);
 	}
 #endif
 	io_release(object);
@@ -623,6 +636,7 @@ mach_msg_overwrite_trap(
 			self->iosc_lane_take = 0;
 		} else if ((io_otype(object) == IOT_PORT && ip_object_to_port(object)->ip_lane) ||
 		    (io_otype(object) == IOT_PORT_SET && ips_object_to_pset(object)->ips_lane)) {
+			iosc_lane_restore_object(object);
 			io_release(object);
 			mr = IOSC_RCV_IN_LANE;
 			goto end;

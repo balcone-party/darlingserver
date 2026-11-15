@@ -29,6 +29,8 @@ void iosc_lane_pset_prepost(struct waitq_set* wqset, struct waitq* wq);
 void iosc_lane_member_open(struct ipc_port* port);
 void iosc_lane_watch_port(struct ipc_port* port);
 void iosc_lane_watch_pset(struct ipc_pset* pset);
+void iosc_lane_restore_port(struct ipc_port* port);
+void iosc_lane_restore_pset(struct ipc_pset* pset);
 void iosc_mqueue_knote(struct ipc_mqueue* mqueue);
 
 #endif // _DARLINGSERVER_DUCT_TAPE_LANES_H_
