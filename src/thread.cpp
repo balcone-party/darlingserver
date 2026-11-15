@@ -26,6 +26,8 @@
 #include <darlingserver/logging.hpp>
 #include <filesystem>
 #include <fstream>
+#include <vector>
+#include <cctype>
 
 #include <sys/mman.h>
 #include <signal.h>
@@ -120,35 +122,54 @@ static DarlingServer::Log threadLog("thread");
 
 DarlingServer::StackPool DarlingServer::Thread::stackPool(IDLE_THREAD_STACK_COUNT, THREAD_STACK_SIZE, USE_THREAD_GUARD_PAGES);
 
+// The process's threads. Its threads come and go while we look: an entry may vanish between
+// readdir and open, and a throwing directory_iterator (filesystem_error is a system_error) made
+// the caller drop the new thread's call, leaving it waiting for a reply for good.
+static std::vector<pid_t> taskIDs(pid_t pid) {
+	std::vector<pid_t> ids;
+	std::error_code ec;
+	std::filesystem::directory_iterator it("/proc/" + std::to_string(pid) + "/task", ec), end;
+	for (; !ec && it != end; it.increment(ec)) {
+		const std::string name = it->path().filename().string();
+		if (!name.empty() && isdigit((unsigned char)name[0])) {
+			ids.push_back(std::stoi(name));
+		}
+	}
+	return ids;
+}
+
 DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void* stackHint):
 	_nstid(nsid),
 	_process(process)
 {
 	_tid = -1;
 
-	for (const auto& entry: std::filesystem::directory_iterator("/proc/" + std::to_string(process->id()) + "/task")) {
-		std::ifstream statusFile(entry.path() / "status");
+	// The innermost NSpid of a task is the id the client knows. Same namespace (the usual case): the
+	// task of that very id; otherwise a scan, repeated because reading /proc/<pid>/task while other
+	// threads exit can skip entries (its position is an index into the live list).
+	auto innerID = [&](pid_t task) -> pid_t {
+		std::ifstream statusFile("/proc/" + std::to_string(process->id()) + "/task/" + std::to_string(task) + "/status");
 		std::string line;
-
 		while (std::getline(statusFile, line)) {
 			if (line.substr(0, sizeof("NSpid") - 1) == "NSpid") {
 				auto pos = line.find_last_of('\t');
-				std::string id;
-
-				if (pos != line.npos) {
-					id = line.substr(pos + 1);
-				}
-
+				std::string id = pos != line.npos ? line.substr(pos + 1) : "";
 				if (id.empty()) {
 					throw std::runtime_error("Failed to parse thread ID");
 				}
+				return std::stoi(id);
+			}
+		}
+		return -1;
+	};
 
-				if (std::stoi(id) != _nstid) {
-					continue;
-				}
-
-				_tid = std::stoi(entry.path().filename().string());
-
+	if (innerID(_nstid) == _nstid) {
+		_tid = _nstid;
+	}
+	for (int attempt = 0; _tid == -1 && attempt < 5; attempt++) {
+		for (pid_t task: taskIDs(process->id())) {
+			if (innerID(task) == _nstid) {
+				_tid = task;
 				break;
 			}
 		}
@@ -158,8 +179,7 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 	if (_tid == -1) {
 		std::vector<pid_t> ids;
 		auto& registry = threadRegistry();
-		for (const auto& entry: std::filesystem::directory_iterator("/proc/" + std::to_string(process->id()) + "/task")) {
-			pid_t currentId = std::stoi(entry.path().filename().string());
+		for (pid_t currentId: taskIDs(process->id())) {
 			// Skip threads that are already registered, as we're sure they're not the ones we want.
 			if (registry.lookupEntryByID(currentId).has_value()) {
 				continue;

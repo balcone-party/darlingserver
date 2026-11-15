@@ -535,7 +535,7 @@ DarlingServer::Server::Server(std::string prefix):
 
 	{
 		const char* env = getenv("IOSC_LANES");
-		if (env && env[0] == '1') {
+		if (!env || env[0] != '0') {
 			uint64_t size = iosc_lanes_size();
 			int fd = memfd_create("iosc-lanes", MFD_CLOEXEC);
 			if (fd < 0 || ftruncate(fd, size) < 0) {

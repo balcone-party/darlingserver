@@ -126,6 +126,7 @@ std::shared_ptr<DarlingServer::Call> DarlingServer::Call::callFromMessage(Messag
 			try {
 				tmp = std::make_shared<Thread>(process, header->tid, stackHint);
 			} catch (std::system_error e) {
+				callLog.error() << "Thread " << header->tid << " of process " << header->pid << ": " << e.what() << callLog.endLog;
 				return tmp;
 			}
 
