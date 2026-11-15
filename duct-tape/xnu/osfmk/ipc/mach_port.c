@@ -91,6 +91,9 @@
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_notify.h>
 #include <ipc/ipc_port.h>
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/lanes.h>
+#endif
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_kmsg.h>
@@ -1551,6 +1554,9 @@ mach_port_move_member(
 	ipc_pset_remove_from_all(port);
 
 	if (after != MACH_PORT_NULL) {
+#ifdef __DARLING__
+		iosc_lane_pset_name(after);
+#endif
 		kr = ipc_pset_add(nset, port, &wq_link_id, &wq_reserved_prepost);
 		ips_unlock(nset);
 	}
@@ -2266,6 +2272,9 @@ mach_port_insert_member(
 	assert(psobj != IO_NULL);
 	assert(obj != IO_NULL);
 
+#ifdef __DARLING__
+	iosc_lane_pset_name(psname);
+#endif
 	kr = ipc_pset_add(ips_object_to_pset(psobj), ip_object_to_port(obj),
 	    &wq_link_id, &wq_reserved_prepost);
 

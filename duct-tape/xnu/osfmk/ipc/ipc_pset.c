@@ -240,8 +240,8 @@ ipc_pset_add(
 	require_ip_active(port);
 
 #ifdef __DARLING__
-	if (port->ip_lane) {
-		iosc_lane_close(port, false);  /* iosc: set members are received through the server */
+	if (iosc_lane_pset_add(pset, port)) {
+		return KERN_SUCCESS;  /* iosc: a lane member: its messages are in its lane, not linked */
 	}
 #endif
 
@@ -276,6 +276,12 @@ ipc_pset_remove(
 {
 	kern_return_t kr;
 	require_ip_active(port);
+
+#ifdef __DARLING__
+	if (iosc_lane_pset_remove(pset, port)) {
+		return KERN_SUCCESS;
+	}
+#endif
 
 	if (port->ip_in_pset == 0) {
 		return KERN_NOT_IN_SET;
@@ -354,9 +360,16 @@ kern_return_t
 ipc_pset_remove_from_all(
 	ipc_port_t      port)
 {
+#ifdef __DARLING__
+	bool lane_member = iosc_lane_pset_remove_all(port);
+	if (port->ip_in_pset == 0) {
+		return lane_member ? KERN_SUCCESS : KERN_NOT_IN_SET;
+	}
+#else
 	if (port->ip_in_pset == 0) {
 		return KERN_NOT_IN_SET;
 	}
+#endif
 
 	/*
 	 * Remove the port's mqueue from all sets
@@ -382,6 +395,10 @@ ipc_pset_destroy(
 	ipc_pset_t      pset)
 {
 	assert(ips_active(pset));
+
+#ifdef __DARLING__
+	iosc_lane_pset_gone(pset, false);
+#endif
 
 #if DSERVER_EXTENDED_DEBUG
 	dtape_hooks->task_clear_port_set(dtape_task_for_xnu_task(current_task())->context, (dtape_port_set_id_t)pset);
@@ -795,6 +812,9 @@ lookup_again:
 		pset = ips_object_to_pset(entry->ie_object);
 		mqueue = &pset->ips_messages;
 		ips_reference(pset);
+#ifdef __DARLING__
+		iosc_lane_pset_gone(pset, true);  /* iosc: a watched set is received through the server */
+#endif
 
 		imq_lock(mqueue);
 		kn->kn_mqueue = mqueue;

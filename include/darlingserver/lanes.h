@@ -16,7 +16,7 @@
 #include <stdint.h>
 
 #define IOSC_LANES_MAGIC 0x4c534f49u  // "IOSL"
-#define IOSC_LANES_VERSION 2u
+#define IOSC_LANES_VERSION 3u
 
 #define IOSC_LANES_PROCS 1024u
 #define IOSC_LANES_COUNT 256u
@@ -26,6 +26,8 @@
 #define IOSC_LANES_MSG_MAX (IOSC_LANES_ENTRY - IOSC_LANES_ENTRY_HDR)
 #define IOSC_LANES_TOKENS 4096u
 #define IOSC_LANES_POOL 4u            // reply tokens per (client reply port, receiver task)
+#define IOSC_LANES_PSETS 256u
+#define IOSC_PSET_LANES 8u            // lane members of one published port set
 
 enum iosc_lane_state {
 	iosc_lane_free = 0,
@@ -52,6 +54,7 @@ typedef struct iosc_lanes_header {
 	uint32_t epoch;          // bumped by the server whenever a lane opens or closes
 	uint32_t tokens;
 	uint64_t tokens_off;
+	uint64_t psets_off;
 } iosc_lanes_header_t;
 
 typedef struct iosc_lanes_proc {
@@ -70,7 +73,8 @@ typedef struct iosc_lane {
 	uint32_t ready;          // futex word: bumped after every committed entry
 	uint32_t waiters;        // receivers waiting on ready
 	uint32_t writers;        // senders between their state check and their commit
-	uint32_t pad0[7];
+	uint32_t pset;           // published port set index + 1 the port is a member of, 0: none
+	uint32_t pad0[6];
 	uint64_t tail;           // producers (own cache line)
 	uint64_t pad1[7];
 	uint64_t head;           // consumers
@@ -102,6 +106,22 @@ typedef struct iosc_lane_token {
 	uint32_t reserved;
 } iosc_lane_token_t;
 
+// A port set with lane members, published so that a receive on it can look at the members' rings.
+// Lane members are not linked to the set in the server (their messages are only in the rings);
+// messages to the other members stay in the server and bump server_pending.
+typedef struct iosc_lane_pset {
+	uint32_t state;          // iosc_lane_state
+	uint32_t gen;
+	uint32_t owner;          // process index
+	uint32_t name;           // the set's name in the owner's space
+	uint32_t ready;          // futex word: bumped on every entry in a member lane and every server_pending
+	uint32_t waiters;
+	uint32_t server_pending; // bumped for every message queued to a non-lane member
+	uint32_t reserved0;
+	uint32_t lanes[IOSC_PSET_LANES];  // lane index + 1
+	uint32_t reserved[16];
+} iosc_lane_pset_t;
+
 typedef struct iosc_lane_entry {
 	uint64_t seq;            // Vyukov bounded queue stamp
 	uint32_t kind;           // iosc_lane_entry_kind
@@ -116,11 +136,13 @@ typedef struct iosc_lane_entry {
 
 _Static_assert(sizeof(iosc_lane_entry_t) == IOSC_LANES_ENTRY_HDR, "lane entry header");
 _Static_assert(sizeof(iosc_lane_t) == 192, "lane");
+_Static_assert(sizeof(iosc_lane_pset_t) == 128, "lane pset");
 
 #define IOSC_LANES_PROCS_OFF 4096ull
 #define IOSC_LANES_LANES_OFF (IOSC_LANES_PROCS_OFF + (uint64_t)IOSC_LANES_PROCS * sizeof(iosc_lanes_proc_t))
 #define IOSC_LANES_TOKENS_OFF (IOSC_LANES_LANES_OFF + (uint64_t)IOSC_LANES_COUNT * sizeof(iosc_lane_t))
-#define IOSC_LANES_RINGS_OFF (IOSC_LANES_TOKENS_OFF + (uint64_t)IOSC_LANES_TOKENS * sizeof(iosc_lane_token_t))
+#define IOSC_LANES_PSETS_OFF (IOSC_LANES_TOKENS_OFF + (uint64_t)IOSC_LANES_TOKENS * sizeof(iosc_lane_token_t))
+#define IOSC_LANES_RINGS_OFF (IOSC_LANES_PSETS_OFF + (uint64_t)IOSC_LANES_PSETS * sizeof(iosc_lane_pset_t))
 
 static inline uint64_t iosc_lanes_size(void) {
 	return IOSC_LANES_RINGS_OFF + (uint64_t)IOSC_LANES_COUNT * IOSC_LANES_RING * IOSC_LANES_ENTRY;

@@ -674,6 +674,7 @@ struct thread {
 #ifdef __DARLING__
 	int                      iosc_lane_take;           /* iosc: this receive takes a lane port's queued message */
 	uint64_t                 iosc_lane_hint;           /* iosc: client address for iosc_lane_hint_t */
+	uint32_t                 iosc_pset_name;           /* iosc: name of the set being added to (lanes.c) */
 #endif
 };
 

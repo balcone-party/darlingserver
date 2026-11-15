@@ -172,7 +172,14 @@ struct ipc_port {
 	/* iosc: Mach message lanes (duct-tape/src/lanes.c) */
 	uint32_t        ip_lane;        /* lane index + 1, 0: none */
 	uint32_t        ip_lane_count;  /* messages in the current 1 s window */
+	uint32_t        ip_lane_simple; /* of them, messages a sender could have written into a lane */
 	uint64_t        ip_lane_t0;     /* start of the window */
+	uint64_t        ip_lane_ban;    /* no lane before this time (it was closed for mostly server traffic) */
+	uint64_t        ip_lane_tail0;  /* ring tail at the start of the window */
+	uint32_t        ip_lane_srv;    /* SERVER entries in the window */
+	uint32_t        ip_lane_pset;   /* published lane pset index + 1 of the one set the port is in */
+	uint32_t        ip_lane_want;   /* hot member of a published set: open a lane after the send */
+	uint32_t        ip_lane_replies;/* requests that named this port as their reply port */
 #endif
 
 #if     MACH_ASSERT

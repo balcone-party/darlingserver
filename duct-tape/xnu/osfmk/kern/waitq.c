@@ -61,6 +61,9 @@
 //#define KEEP_WAITQ_LINK_STATS
 //#define KEEP_WAITQ_PREPOST_STATS
 
+#ifdef __DARLING__
+#include <darlingserver/duct-tape/lanes.h>
+#endif
 #include <kern/ast.h>
 #include <kern/backtrace.h>
 #include <kern/kern_types.h>
@@ -2156,6 +2159,9 @@ waitq_select_walk_cb(struct waitq *waitq, void *ctx,
 		 * could potentially release another thread to handle events.
 		 */
 		if (waitq_set_can_prepost(wqset)) {
+#ifdef __DARLING__
+			iosc_lane_pset_prepost(wqset, waitq);
+#endif
 			wq_prepost_do_post_locked(
 				wqset, waitq, args.reserved_preposts);
 		} else if (waitq_set_has_prepost_hook(wqset)) {

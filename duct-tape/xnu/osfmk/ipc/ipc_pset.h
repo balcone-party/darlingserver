@@ -80,6 +80,9 @@ struct ipc_pset {
 	 */
 	struct ipc_object       ips_object;
 	struct ipc_mqueue       ips_messages;
+#ifdef __DARLING__
+	uint32_t                ips_lane;       /* iosc: published lane pset index + 1 (duct-tape/src/lanes.c) */
+#endif
 };
 
 #define ips_references          ips_object.io_references

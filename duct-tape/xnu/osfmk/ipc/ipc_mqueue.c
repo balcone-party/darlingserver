@@ -534,7 +534,7 @@ ipc_mqueue_send(
 #ifdef __DARLING__
 	uint32_t lane_gen = 0, lane = 0;
 	if (!imq_is_set(mqueue)) {
-		iosc_lane_note_send(mqueue);
+		iosc_lane_note_send(mqueue, kmsg);
 		lane = iosc_lane_of(ip_from_mq(mqueue), &lane_gen);
 	}
 #endif
@@ -642,6 +642,16 @@ ipc_mqueue_send(
 		ipc_mqueue_post(mqueue, kmsg, option);
 		iosc_lane_after_post(lane_port, lane, lane_gen);
 		ip_release(lane_port);
+		return MACH_MSG_SUCCESS;
+	}
+#endif
+#ifdef __DARLING__
+	ipc_port_t want = ip_from_mq(mqueue);
+	if (want->ip_lane_want) {
+		ip_reference(want);
+		ipc_mqueue_post(mqueue, kmsg, option);
+		iosc_lane_member_open(want);
+		ip_release(want);
 		return MACH_MSG_SUCCESS;
 	}
 #endif

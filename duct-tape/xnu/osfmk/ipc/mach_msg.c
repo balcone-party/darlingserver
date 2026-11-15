@@ -336,7 +336,8 @@ mach_msg_receive_results(
 	mach_msg_receive_results_complete(object);
 #ifdef __DARLING__
 	/* iosc: sent away from a port that just got a lane */
-	if (mr == MACH_RCV_PORT_CHANGED && io_otype(object) == IOT_PORT && ip_object_to_port(object)->ip_lane) {
+	if (mr == MACH_RCV_PORT_CHANGED && ((io_otype(object) == IOT_PORT && ip_object_to_port(object)->ip_lane) ||
+	    (io_otype(object) == IOT_PORT_SET && ips_object_to_pset(object)->ips_lane))) {
 		mr = IOSC_RCV_IN_LANE;
 	}
 #endif
@@ -620,7 +621,8 @@ mach_msg_overwrite_trap(
 		/* iosc: the receiver takes this port's messages from its lane */
 		if (self->iosc_lane_take) {
 			self->iosc_lane_take = 0;
-		} else if (io_otype(object) == IOT_PORT && ip_object_to_port(object)->ip_lane) {
+		} else if ((io_otype(object) == IOT_PORT && ip_object_to_port(object)->ip_lane) ||
+		    (io_otype(object) == IOT_PORT_SET && ips_object_to_pset(object)->ips_lane)) {
 			io_release(object);
 			mr = IOSC_RCV_IN_LANE;
 			goto end;
