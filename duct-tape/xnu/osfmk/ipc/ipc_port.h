@@ -181,6 +181,8 @@ struct ipc_port {
 	uint32_t        ip_lane_want;   /* hot member of a published set: open a lane after the send */
 	uint32_t        ip_lane_replies;/* requests that named this port as their reply port */
 	uint32_t        ip_lane_watched;/* an EVFILT_MACHPORT knote was attached (workloop knotes are not on imq_klist) */
+	uint32_t        ip_lane_tnext;  /* SERVER entries are appended in the order the messages were queued: */
+	uint32_t        ip_lane_tserve; /* ticket taken at the post, the next one allowed to append */
 #endif
 
 #if     MACH_ASSERT

@@ -242,6 +242,7 @@ static uint32_t lane_open(ipc_port_t port, ipc_mqueue_t mqueue) {
 		__atomic_add_fetch(&l->gen, 1, __ATOMIC_RELEASE);
 		__atomic_store_n(&l->state, iosc_lane_open, __ATOMIC_RELEASE);
 		port->ip_lane = i + 1;
+		port->ip_lane_tserve = port->ip_lane_tnext;
 		lane_port[i] = port;
 		l->pset = 0;
 		// a port watched by a knote (EVFILT_MACHPORT through kqchan) rings the doorbell
@@ -288,12 +289,21 @@ static void lane_traffic(ipc_port_t port, iosc_lane_t* l) {
 
 // After a message was queued to a lane port through the server: its SERVER entry. A full ring
 // waits as a full queue would.
-void iosc_lane_after_post(ipc_port_t port, uint32_t lane, uint32_t gen) {
+void iosc_lane_after_post(ipc_port_t port, uint32_t lane, uint32_t gen, uint32_t ticket) {
 	iosc_lane_t* l = &lanes[lane - 1];
 	for (;;) {
 		if (port->ip_lane != lane || __atomic_load_n(&l->gen, __ATOMIC_ACQUIRE) != gen ||
 		    __atomic_load_n(&l->state, __ATOMIC_ACQUIRE) != iosc_lane_open) {
+			if ((int32_t)(ticket + 1 - port->ip_lane_tserve) > 0) {
+				port->ip_lane_tserve = ticket + 1;  // never back: a newer lane may serve later tickets
+			}
 			return;  // closed meanwhile: the message is an ordinary queued one now
+		}
+		if (port->ip_lane_tserve != ticket) {
+			// an earlier message still waits for room: SERVER entries keep the queue's order
+			assert_wait_timeout((event_t)&l->tail, THREAD_UNINT, 1, NSEC_PER_MSEC);
+			thread_block(THREAD_CONTINUE_NULL);
+			continue;
 		}
 		uint64_t pos = __atomic_load_n(&l->tail, __ATOMIC_RELAXED);
 		iosc_lane_entry_t* e = lane_entry(l, pos);
@@ -310,11 +320,15 @@ void iosc_lane_after_post(ipc_port_t port, uint32_t lane, uint32_t gen) {
 				}
 				pset_wake(l->pset, 1);
 				lane_doorbell(l);
+				port->ip_lane_tserve = ticket + 1;
 				lane_traffic(port, l);
 				return;
 			}
 		} else if ((int64_t)(seq - pos) < 0) {
-			delay(200);  // full
+			// full: sleep this microthread (delay() would spin the server's only worker, and the
+			// receiver needs it to drain the ring)
+			assert_wait_timeout((event_t)&l->tail, THREAD_UNINT, 1, NSEC_PER_MSEC);
+			thread_block(THREAD_CONTINUE_NULL);
 		}
 	}
 };

@@ -545,10 +545,9 @@ ipc_mqueue_send(
 {
 	int wresult;
 #ifdef __DARLING__
-	uint32_t lane_gen = 0, lane = 0;
+	uint32_t lane_gen = 0, lane = 0, lane_ticket = 0;
 	if (!imq_is_set(mqueue)) {
 		iosc_lane_note_send(mqueue, kmsg);
-		lane = iosc_lane_of(ip_from_mq(mqueue), &lane_gen);
 	}
 #endif
 
@@ -649,11 +648,23 @@ ipc_mqueue_send(
 	}
 
 #ifdef __DARLING__
+	/*
+	 * The lane and the ticket are taken right before the post, not before a wait for room:
+	 * a ticket held by a sender blocked on the full queue would stall every later SERVER entry
+	 * (a send-once message may still be queued meanwhile), so the receiver never sees the
+	 * queued messages and the queue never drains.
+	 */
+	if (!imq_is_set(mqueue)) {
+		lane = iosc_lane_of(ip_from_mq(mqueue), &lane_gen);
+		if (lane) {
+			lane_ticket = ip_from_mq(mqueue)->ip_lane_tnext++;
+		}
+	}
 	if (lane) {
 		ipc_port_t lane_port = ip_from_mq(mqueue);
 		ip_reference(lane_port);
 		ipc_mqueue_post(mqueue, kmsg, option);
-		iosc_lane_after_post(lane_port, lane, lane_gen);
+		iosc_lane_after_post(lane_port, lane, lane_gen, lane_ticket);
 		ip_release(lane_port);
 		return MACH_MSG_SUCCESS;
 	}
