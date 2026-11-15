@@ -16,7 +16,7 @@
 #include <stdint.h>
 
 #define IOSC_LANES_MAGIC 0x4c534f49u  // "IOSL"
-#define IOSC_LANES_VERSION 3u
+#define IOSC_LANES_VERSION 4u
 
 #define IOSC_LANES_PROCS 1024u
 #define IOSC_LANES_COUNT 256u
@@ -61,7 +61,8 @@ typedef struct iosc_lanes_proc {
 	uint32_t pid;            // 0: free
 	uint32_t alive;
 	uint32_t audit[8];       // the task's audit token, as the server has it
-	uint32_t reserved[6];
+	uint32_t doorbell;       // futex word: bumped on every entry in a watched lane of this process
+	uint32_t reserved[5];
 } iosc_lanes_proc_t;
 
 typedef struct iosc_lane {
@@ -74,7 +75,8 @@ typedef struct iosc_lane {
 	uint32_t waiters;        // receivers waiting on ready
 	uint32_t writers;        // senders between their state check and their commit
 	uint32_t pset;           // published port set index + 1 the port is a member of, 0: none
-	uint32_t pad0[6];
+	uint32_t kq;             // a knote watches the port: entries ring the owner's doorbell
+	uint32_t pad0[5];
 	uint64_t tail;           // producers (own cache line)
 	uint64_t pad1[7];
 	uint64_t head;           // consumers
@@ -117,7 +119,7 @@ typedef struct iosc_lane_pset {
 	uint32_t ready;          // futex word: bumped on every entry in a member lane and every server_pending
 	uint32_t waiters;
 	uint32_t server_pending; // bumped for every message queued to a non-lane member
-	uint32_t reserved0;
+	uint32_t kq;             // a knote watches the set: its lanes and server_pending ring the doorbell
 	uint32_t lanes[IOSC_PSET_LANES];  // lane index + 1
 	uint32_t reserved[16];
 } iosc_lane_pset_t;

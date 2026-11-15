@@ -446,6 +446,19 @@ ipc_mqueue_has_klist(ipc_mqueue_t mqueue)
 	return port->ip_sync_link_state == PORT_SYNC_LINK_ANY;
 }
 
+#ifdef __DARLING__
+/* iosc: messages appeared in the queue without a post (a lane closed): fire its knotes as a post would. */
+void
+iosc_mqueue_knote(ipc_mqueue_t mqueue)
+{
+	ipc_port_t port = ip_from_mq(mqueue);
+	if (!ipc_kmsg_queue_empty(&mqueue->imq_messages) && ip_active(port) && port->ip_receiver_name != MACH_PORT_NULL &&
+	    is_active(port->ip_receiver) && ipc_mqueue_has_klist(mqueue)) {
+		KNOTE(&mqueue->imq_klist, 0);
+	}
+}
+#endif
+
 /*
  *	Routine:	ipc_mqueue_changed
  *	Purpose:

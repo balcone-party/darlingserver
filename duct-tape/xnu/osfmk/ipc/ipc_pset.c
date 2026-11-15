@@ -875,9 +875,7 @@ lookup_again:
 		 */
 		ip_lock(port);
 #ifdef __DARLING__
-		if (port->ip_lane) {
-			iosc_lane_close(port, false);  /* iosc: a watched port goes back to the server's queue */
-		}
+		iosc_lane_watch_port(port);  /* iosc: the client serves the knote from the lane */
 #endif
 		imq_lock(mqueue);
 

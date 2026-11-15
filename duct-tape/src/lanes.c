@@ -151,6 +151,18 @@ static iosc_lane_pset_t* pset_at(uint32_t s) {
 	return s && s <= IOSC_LANES_PSETS && pset_obj[s - 1] ? &psets[s - 1] : NULL;
 }
 
+// A knote watches this lane (or its set): wake the owner's lane watcher (client lanes.c).
+static void lane_doorbell(iosc_lane_t* l) {
+	uint32_t s = l->pset;
+	if (!l->kq && !(s && s <= IOSC_LANES_PSETS && psets[s - 1].kq)) {
+		return;
+	}
+	if (l->owner < IOSC_LANES_PROCS) {
+		__atomic_add_fetch(&procs[l->owner].doorbell, 1, __ATOMIC_SEQ_CST);
+		iosc_futex_wake(&procs[l->owner].doorbell, 1);
+	}
+}
+
 static void pset_wake(uint32_t s, int count) {
 	iosc_lane_pset_t* p = pset_at(s);
 	if (p) {
@@ -192,8 +204,7 @@ void iosc_lane_note_send(ipc_mqueue_t mqueue, ipc_kmsg_t kmsg) {
 	if (++port->ip_lane_count < LANE_OPEN_RATE || port->ip_lane_simple * 3 < port->ip_lane_count * 2) {
 		return;
 	}
-	if (!ip_active(port) || port->ip_specialreply || ip_kotype(port) != IKOT_NONE ||
-	    !port->ip_receiver_name || !SLIST_EMPTY(&mqueue->imq_klist)) {
+	if (!ip_active(port) || port->ip_specialreply || ip_kotype(port) != IKOT_NONE || !port->ip_receiver_name) {
 		return;
 	}
 	if (port->ip_in_pset) {
@@ -233,6 +244,8 @@ static uint32_t lane_open(ipc_port_t port, ipc_mqueue_t mqueue) {
 		port->ip_lane = i + 1;
 		lane_port[i] = port;
 		l->pset = 0;
+		// a port watched by a knote (EVFILT_MACHPORT through kqchan) rings the doorbell
+		l->kq = port->ip_lane_watched;
 		port->ip_lane_t0 = mach_absolute_time();
 		port->ip_lane_tail0 = 0;
 		port->ip_lane_srv = 0;
@@ -296,6 +309,7 @@ void iosc_lane_after_post(ipc_port_t port, uint32_t lane, uint32_t gen) {
 					iosc_futex_wake(&l->ready, 1);
 				}
 				pset_wake(l->pset, 1);
+				lane_doorbell(l);
 				lane_traffic(port, l);
 				return;
 			}
@@ -311,7 +325,7 @@ void dtape_set_lane_hint(uint64_t addr) {
 
 static bool port_plain(ipc_port_t port) {
 	return ip_active(port) && !port->ip_specialreply && ip_kotype(port) == IKOT_NONE && !port->ip_in_pset &&
-	    port->ip_receiver_name && SLIST_EMPTY(&port->ip_messages.imq_klist);
+	    port->ip_receiver_name;
 }
 
 #define LANE_REPLY_USES 8
@@ -569,6 +583,7 @@ void iosc_lane_close(ipc_port_t port, bool drop) {
 			ipc_kmsg_enqueue(&mq->imq_messages, k);
 		}
 		mq->imq_msgcount += added;
+		iosc_mqueue_knote(mq);
 		imq_unlock(mq);
 	}
 
@@ -602,6 +617,8 @@ void iosc_lane_close(ipc_port_t port, bool drop) {
 	__atomic_store_n(&l->state, iosc_lane_free, __ATOMIC_RELEASE);
 	__atomic_add_fetch(&hdr->epoch, 1, __ATOMIC_RELEASE);
 	lane_wake_all(l);
+	lane_doorbell(l);  // a knote served from this lane goes back to the server's kqchan
+	l->kq = 0;
 };
 
 // --- port sets ---
@@ -621,6 +638,7 @@ static void pset_publish(ipc_pset_t pset, mach_port_name_t name, uint32_t owner)
 		p->owner = owner - 1;
 		p->name = name;
 		p->server_pending = 1;  // members may have queued messages
+		p->kq = !SLIST_EMPTY(&pset->ips_messages.imq_klist);
 		__atomic_add_fetch(&p->gen, 1, __ATOMIC_RELEASE);
 		__atomic_store_n(&p->state, iosc_lane_open, __ATOMIC_RELEASE);
 		ips_reference(pset);
@@ -757,6 +775,10 @@ void iosc_lane_pset_prepost(struct waitq_set* wqset, struct waitq* wq) {
 		}
 		__atomic_add_fetch(&psets[i].server_pending, 1, __ATOMIC_SEQ_CST);
 		pset_wake(i + 1, 1);
+		if (psets[i].kq && psets[i].owner < IOSC_LANES_PROCS) {
+			__atomic_add_fetch(&procs[psets[i].owner].doorbell, 1, __ATOMIC_SEQ_CST);
+			iosc_futex_wake(&procs[psets[i].owner].doorbell, 1);
+		}
 		return;
 	}
 }
@@ -767,8 +789,7 @@ void iosc_lane_member_open(ipc_port_t port) {
 	ip_lock(port);
 	uint32_t s = port->ip_lane_pset;
 	port->ip_lane_want = 0;
-	if (!region || port->ip_lane || !ip_active(port) || !port->ip_in_pset || !pset_at(s) ||
-	    !SLIST_EMPTY(&port->ip_messages.imq_klist)) {
+	if (!region || port->ip_lane || !ip_active(port) || !port->ip_in_pset || !pset_at(s)) {
 		ip_unlock(port);
 		return;
 	}
@@ -819,4 +840,26 @@ void iosc_lane_member_open(ipc_port_t port) {
 	}
 	ips_unlock(pset);
 	ip_unlock(port);
+}
+
+// A knote is attached to a lane port or a published set: from now on its entries ring the owner's
+// doorbell, and the client serves the knote from the lane.
+void iosc_lane_watch_port(ipc_port_t port) {
+	port->ip_lane_watched = 1;
+	iosc_lane_t* l = port_lane(port);
+	if (l) {
+		__atomic_store_n(&l->kq, 1, __ATOMIC_SEQ_CST);
+		lane_doorbell(l);
+	}
+}
+
+void iosc_lane_watch_pset(ipc_pset_t pset) {
+	iosc_lane_pset_t* p = region && pset->ips_lane ? pset_at(pset->ips_lane) : NULL;
+	if (p) {
+		__atomic_store_n(&p->kq, 1, __ATOMIC_SEQ_CST);
+		if (p->owner < IOSC_LANES_PROCS) {
+			__atomic_add_fetch(&procs[p->owner].doorbell, 1, __ATOMIC_SEQ_CST);
+			iosc_futex_wake(&procs[p->owner].doorbell, 1);
+		}
+	}
 }
