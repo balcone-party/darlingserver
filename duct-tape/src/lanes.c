@@ -247,6 +247,7 @@ static uint32_t lane_open(ipc_port_t port, ipc_mqueue_t mqueue) {
 		l->owner = owner - 1;
 		lane_owner[i] = owner - 1;
 		l->name = port->ip_receiver_name;
+		l->qlimit = mqueue->imq_qlimit;
 		__atomic_add_fetch(&l->gen, 1, __ATOMIC_RELEASE);
 		__atomic_store_n(&l->state, iosc_lane_open, __ATOMIC_RELEASE);
 		port->ip_lane = i + 1;
@@ -757,7 +758,39 @@ static void lane_restore(uint32_t i) {
 	put32(&l->owner, lane_owner[i]);
 	put32(&l->name, port->ip_receiver_name);
 	put32(&l->pset, lane_pset[i]);
+	put32(&l->qlimit, port->ip_messages.imq_qlimit);
 	put32(&l->state, iosc_lane_open);
+}
+
+// mqueue locked. Committed INLINE entries are queued messages the kernel queue does not count.
+bool iosc_lane_backlog_full(ipc_port_t port) {
+	uint32_t i = port->ip_lane;
+	if (!region || !i || i > IOSC_LANES_COUNT || lane_port[i - 1] != port) {
+		return false;
+	}
+	iosc_lane_t* l = &lanes[i - 1];
+	if (__atomic_load_n(&l->state, __ATOMIC_ACQUIRE) != iosc_lane_open) {
+		return false;
+	}
+	uint64_t head = __atomic_load_n(&l->head, __ATOMIC_ACQUIRE), tail = __atomic_load_n(&l->tail, __ATOMIC_ACQUIRE);
+	if (tail - head > IOSC_LANES_RING) {  // the region is writable by the device: never trust it for a loop bound
+		return true;
+	}
+	uint32_t inl = 0;
+	for (uint64_t pos = head; pos != tail; pos++) {
+		iosc_lane_entry_t* e = lane_entry(l, pos);
+		if (__atomic_load_n(&e->seq, __ATOMIC_ACQUIRE) == pos + 1 && e->kind == iosc_lane_inline) {
+			inl++;
+		}
+	}
+	return port->ip_messages.imq_msgcount + inl >= port->ip_messages.imq_qlimit;
+}
+
+void iosc_lane_qlimit(ipc_port_t port) {
+	uint32_t i = port->ip_lane;
+	if (region && i && i <= IOSC_LANES_COUNT && lane_port[i - 1] == port) {
+		put32(&lanes[i - 1].qlimit, port->ip_messages.imq_qlimit);
+	}
 }
 
 void iosc_lane_restore_port(ipc_port_t port) {

@@ -16,6 +16,8 @@ bool iosc_lanes_enabled(void);
 struct ipc_kmsg;
 void iosc_lane_note_send(struct ipc_mqueue* mqueue, struct ipc_kmsg* kmsg);
 uint32_t iosc_lane_of(struct ipc_port* port, uint32_t* gen);
+bool iosc_lane_backlog_full(struct ipc_port* port);
+void iosc_lane_qlimit(struct ipc_port* port);
 void iosc_lane_after_post(struct ipc_port* port, uint32_t lane, uint32_t gen, uint32_t ticket);
 void iosc_lane_close(struct ipc_port* port, bool drop);
 void iosc_lane_hint_sent(uint32_t name, struct ipc_port* port, struct ipc_port* reply, uint32_t reply_name);

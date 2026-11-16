@@ -76,7 +76,8 @@ typedef struct iosc_lane {
 	uint32_t writers;        // senders between their state check and their commit
 	uint32_t pset;           // published port set index + 1 the port is a member of, 0: none
 	uint32_t kq;             // a knote watches the port: entries ring the owner's doorbell
-	uint32_t pad0[5];
+	uint32_t qlimit;         // the port's queue limit: a sender adds INLINE entries only below it
+	uint32_t pad0[4];
 	uint64_t tail;           // producers (own cache line)
 	uint64_t pad1[7];
 	uint64_t head;           // consumers

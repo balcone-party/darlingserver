@@ -551,6 +551,40 @@ ipc_mqueue_send(
 	}
 #endif
 
+#ifdef __DARLING__
+	/*
+	 * Messages a sender wrote straight into the port's lane count toward the queue limit of a
+	 * sender with MACH_SEND_TIMEOUT. Without them a CFRunLoop wakeup port (qlimit 1, timeout 0)
+	 * passed as empty once its lane was full, and the sender, the port's only receiver, waited for
+	 * ring room only it could free. Readers drain the lane without the kernel, so a sender with a
+	 * timeout polls; a blocking sender still waits for ring room after the post.
+	 */
+	if ((option & MACH_SEND_TIMEOUT) && !imq_is_set(mqueue) && !(option & MACH_SEND_ALWAYS) &&
+	    MACH_MSGH_BITS_REMOTE(kmsg->ikm_header->msgh_bits) != MACH_MSG_TYPE_PORT_SEND_ONCE) {
+		ipc_port_t lport = ip_from_mq(mqueue);
+		uint64_t ldeadline = 0;
+		if (send_timeout) {
+			clock_interval_to_deadline(send_timeout, 1000 * NSEC_PER_USEC, &ldeadline);
+		}
+		while (iosc_lane_backlog_full(lport)) {
+			if (!send_timeout || mach_absolute_time() >= ldeadline) {
+				imq_unlock(mqueue);
+				return MACH_SEND_TIMED_OUT;
+			}
+			imq_unlock(mqueue);
+			assert_wait_timeout((event_t)&lport->ip_lane, THREAD_ABORTSAFE, 1, NSEC_PER_MSEC);
+			if (thread_block(THREAD_CONTINUE_NULL) == THREAD_INTERRUPTED) {
+				return MACH_SEND_INTERRUPTED;
+			}
+			imq_lock(mqueue);
+			if (!ip_active(lport)) {
+				imq_unlock(mqueue);
+				return MACH_SEND_INVALID_DEST;
+			}
+		}
+	}
+#endif
+
 	/*
 	 *  Don't block if:
 	 *	1) We're under the queue limit.
@@ -1801,6 +1835,9 @@ ipc_mqueue_set_qlimit(
 		}
 	}
 	mqueue->imq_qlimit = (uint16_t)qlimit;
+#ifdef __DARLING__
+	iosc_lane_qlimit(ip_from_mq(mqueue));
+#endif
 	imq_unlock(mqueue);
 }
 
