@@ -28,6 +28,8 @@
 	#include <sanitizer/asan_interface.h>
 #endif
 
+std::atomic<size_t> DarlingServer::StackPool::_mapped{0};
+
 bool DarlingServer::StackPool::Stack::isValid() const {
 	return base != nullptr && size != 0;
 };
@@ -60,6 +62,8 @@ void* DarlingServer::StackPool::_allocate(size_t stackSize, bool useGuardPages) 
 		throw std::system_error(errno, std::generic_category());
 	}
 
+	_mapped.fetch_add(1, std::memory_order_relaxed);
+
 	if (useGuardPages) {
 		mprotect(stack, pageSize, PROT_NONE);
 		stack = (char*)stack + pageSize;
@@ -71,6 +75,7 @@ void* DarlingServer::StackPool::_allocate(size_t stackSize, bool useGuardPages) 
 
 void DarlingServer::StackPool::_free(void* stack, size_t stackSize, bool useGuardPages) {
 	size_t pageSize = sysconf(_SC_PAGESIZE);
+	_mapped.fetch_sub(1, std::memory_order_relaxed);
 
 	if (useGuardPages) {
 		if (munmap((char*)stack - pageSize, stackSize + pageSize * 2) < 0) {

@@ -80,10 +80,20 @@ void DarlingServer::dumpKqchans(int fd) {
 
 void DarlingServer::dumpThreads(int fd) {
 	auto threads = threadRegistry().copyEntries();
+	size_t live = threads.size();
+	{
+		std::scoped_lock lock(Thread::_deadThreadsLock);
+		for (auto& w: Thread::_deadThreads) {
+			if (auto t = w.lock()) {
+				threads.push_back(t);
+			}
+		}
+	}
 	time_t now = time(nullptr);
 	char when[64];
 	strftime(when, sizeof(when), "%F %T", localtime(&now));
-	dprintf(fd, "=== darlingserver pid %d, %s, threads %zu, exe=%p\n", getpid(), when, threads.size(), (void*)&__executable_start);
+	dprintf(fd, "=== darlingserver pid %d, %s, threads %zu (dead, not freed %zu; objects %zu), stacks %zu, exe=%p\n", getpid(), when, live, threads.size() - live,
+		Thread::_liveObjects.load(), StackPool::mapped(), (void*)&__executable_start);
 
 	for (auto& thread: threads) {
 		// another thread may hold the lock for long (it is the one hung): read without it
@@ -110,6 +120,10 @@ void DarlingServer::dumpThreads(int fd) {
 			thread->_dead ? " dead" : "",
 			thread->_deferReplyForS2C ? " s2c-deferred" : "",
 			thread->_interrupts.size(), thread->_pendingInterrupts.size());
+		if (thread->_dead) {
+			// copies: ours in `threads`, plus the registry snapshot holds none for dead threads
+			dprintf(fd, "  refs: %ld, selfReference %d, dtape %p\n", thread.use_count() - 1, !!thread->_selfReference, (void*)thread->_dtapeThread);
+		}
 
 		if (auto dtape = thread->_dtapeThread) {
 			std::vector<char> copy(dtape_thread_struct_size());

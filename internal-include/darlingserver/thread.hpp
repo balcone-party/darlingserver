@@ -27,6 +27,7 @@
 #include <condition_variable>
 #include <stack>
 #include <queue>
+#include <atomic>
 
 #include <darlingserver/message.hpp>
 #include <darlingserver/duct-tape.h>
@@ -158,6 +159,11 @@ namespace DarlingServer {
 		static void _handleInterruptEnterForCurrentThread();
 
 		static StackPool stackPool;
+		bool _registeredWithProcess = false;  // kernelAsync runners never are
+		static std::atomic<size_t> _liveObjects;  // iosc: Thread objects not yet destroyed, for the dump
+		// iosc: dead threads (out of the registry) whose objects still live, for the dump
+		static std::mutex _deadThreadsLock;
+		static std::vector<std::weak_ptr<Thread>> _deadThreads;
 
 		void _setEternalID(EternalID eid);
 

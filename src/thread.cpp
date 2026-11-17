@@ -20,6 +20,7 @@
 #include "darlingserver/registry.hpp"
 #include <darlingserver/calltrace.hpp>
 #include <darlingserver/thread.hpp>
+#include <algorithm>
 #include <darlingserver/process.hpp>
 #include <darlingserver/call.hpp>
 #include <darlingserver/server.hpp>
@@ -121,6 +122,9 @@ static thread_local uint64_t interruptDisableCount = 0;
 static DarlingServer::Log threadLog("thread");
 
 DarlingServer::StackPool DarlingServer::Thread::stackPool(IDLE_THREAD_STACK_COUNT, THREAD_STACK_SIZE, USE_THREAD_GUARD_PAGES);
+std::atomic<size_t> DarlingServer::Thread::_liveObjects{0};
+std::mutex DarlingServer::Thread::_deadThreadsLock;
+std::vector<std::weak_ptr<DarlingServer::Thread>> DarlingServer::Thread::_deadThreads;
 
 // The process's threads. Its threads come and go while we look: an entry may vanish between
 // readdir and open, and a throwing directory_iterator (filesystem_error is a system_error) made
@@ -270,6 +274,7 @@ DarlingServer::Thread::Thread(std::shared_ptr<Process> process, NSID nsid, void*
 	_s2cInterruptExitSemaphore = dtape_semaphore_create(process->_dtapeTask, 0);
 
 	threadLog.info() << "New thread created with ID " << _tid << " and NSID " << _nstid << " for process with ID " << (process ? process->id() : -1) << " and NSID " << (process ? process->nsid() : -1);
+	_liveObjects.fetch_add(1, std::memory_order_relaxed);
 };
 
 DarlingServer::Thread::Thread(KernelThreadConstructorTag tag):
@@ -287,21 +292,24 @@ DarlingServer::Thread::Thread(KernelThreadConstructorTag tag):
 	idLock.unlock();
 
 	_dtapeThread = dtape_thread_create(Process::kernelProcess()->_dtapeTask, _nstid, this);
+	_liveObjects.fetch_add(1, std::memory_order_relaxed);
 };
 
 void DarlingServer::Thread::registerWithProcess() {
 	std::unique_lock lock(_process->_rwlock);
 	_process->_threads[_nstid] = shared_from_this();
+	_registeredWithProcess = true;
 };
 
 DarlingServer::Thread::~Thread() noexcept(false) {
+	_liveObjects.fetch_sub(1, std::memory_order_relaxed);
 	threadLog.info() << *this << ": thread being destroyed" << threadLog.endLog;
 
 	if (_stack.isValid()) {
 		stackPool.free(_stack);
 	}
 
-	if (!_process) {
+	if (!_process || !_registeredWithProcess) {
 		return;
 	}
 
@@ -970,7 +978,9 @@ static void kernelAsyncRunnerThreadWorker(bool permanent, std::shared_ptr<Darlin
 	} while (permanent);
 
 	self = nullptr;
-	DarlingServer::Thread::currentThread()->terminate();
+	// terminate() never returns, so nothing on this stack is destroyed: a shared_ptr temporary
+	// (currentThread() returns one) would keep this Thread and its stack alive forever.
+	currentThreadVar.get()->terminate();
 	__builtin_unreachable();
 };
 
@@ -1647,6 +1657,12 @@ void DarlingServer::Thread::notifyDead() {
 		_scheduleRelease();
 	} else {
 		resume();
+	}
+
+	{
+		std::scoped_lock lock(_deadThreadsLock);
+		_deadThreads.erase(std::remove_if(_deadThreads.begin(), _deadThreads.end(), [](auto& w) { return w.expired(); }), _deadThreads.end());
+		_deadThreads.push_back(weak_from_this());
 	}
 
 	threadRegistry().unregisterEntry(shared_from_this());

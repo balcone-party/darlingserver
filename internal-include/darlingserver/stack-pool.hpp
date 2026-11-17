@@ -24,6 +24,7 @@
 
 #include <vector>
 #include <mutex>
+#include <atomic>
 
 namespace DarlingServer {
 	class StackPool {
@@ -55,6 +56,8 @@ namespace DarlingServer {
 		std::vector<void*> _stacks;
 		std::mutex _mutex;
 
+		static std::atomic<size_t> _mapped;
+
 		static void* _allocate(size_t stackSize, bool useGuardPages);
 		static void _free(void* stack, size_t stackSize, bool useGuardPages);
 
@@ -63,6 +66,9 @@ namespace DarlingServer {
 
 		void allocate(Stack& stack);
 		void free(Stack& stack);
+
+		// iosc: stacks currently mapped (in use plus idle), for the dump
+		static size_t mapped() { return _mapped.load(std::memory_order_relaxed); }
 	};
 };
 
