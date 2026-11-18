@@ -407,9 +407,9 @@ void DarlingServer::Call::ShmWindow::processCall() {
 			code = _body.fd >= 0 ? process->setSharedWindow(_body.fd, _body.base, _body.size) : -EBADF;
 		}
 	}
-	if (_body.fd >= 0) {
-		close(_body.fd);
-	}
+	// ~ShmWindow closes _body.fd: closing it here too closed whatever descriptor another thread had
+	// opened under that number meanwhile (seen as epoll_ctl EBADF in addMonitor while many processes
+	// checked in at once)
 	_sendReply(code);
 };
 

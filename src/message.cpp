@@ -374,6 +374,12 @@ void DarlingServer::Message::_ensureDescriptorHeader(size_t newSpace) {
 
 	auto credHeader = _credentialsHeader();
 	size_t oldSpace = _descriptorSpace();
+	// the descriptors already held move to the new buffer (malloc'd slots would otherwise be closed
+	// as descriptors by _cleanupSelf)
+	std::vector<int> held(oldSpace, -1);
+	if (auto oldFdHeader = _descriptorHeader()) {
+		memcpy(held.data(), CMSG_DATA(oldFdHeader), sizeof(int) * oldSpace);
+	}
 	size_t controlLen = (credHeader ? CMSG_SPACE(sizeof(struct ucred)) : 0) + (newSpace == 0 ? 0 : CMSG_SPACE(sizeof(int) * newSpace));
 
 	if (controlLen == 0) {
@@ -411,8 +417,8 @@ void DarlingServer::Message::_ensureDescriptorHeader(size_t newSpace) {
 		fdHeader->cmsg_level = SOL_SOCKET;
 		fdHeader->cmsg_type = SCM_RIGHTS;
 
-		for (size_t i = oldSpace; i < newSpace; ++i) {
-			int fd = -1;
+		for (size_t i = 0; i < newSpace; ++i) {
+			int fd = i < oldSpace ? held[i] : -1;
 			memcpy(CMSG_DATA(fdHeader) + (sizeof(int) * i), &fd, sizeof(int));
 		}
 	}
